@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Generated world rasters and downloaded source data. Both are reproducible:
+# rasters rebuild from peg/world/earth.json.gz, and that rebuilds from
+# Natural Earth via tools/bake_earth.py.
+.cache/
+
+# Save games
+saves/
+*.peg
+
+.venv/
+venv/
+.idea/
+.vscode/
+.DS_Store
