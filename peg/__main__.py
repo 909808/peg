@@ -265,7 +265,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--seed", type=int, default=20410,
                    help="world seed (default 20410)")
     p.add_argument("--no-colour", action="store_true", dest="no_colour")
-    sub = p.add_subparsers(dest="cmd", required=True)
+    # Not required: running "peg" bare opens the menu instead of printing a
+    # usage error, which is the friendlier answer for anyone who has just
+    # installed it and does not yet know the subcommands.
+    sub = p.add_subparsers(dest="cmd", required=False)
 
     s = sub.add_parser("survey", help="report on a point of the Earth")
     s.add_argument("lon", type=float)
@@ -311,8 +314,105 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+# --------------------------------------------------------------------------
+# the menu you get when you just run "peg"
+# --------------------------------------------------------------------------
+
+#: A few places worth looking at, so nobody has to know coordinates to start.
+PLACES = (
+    ("Iowa prairie",       -93.5,  41.9, "the best farmland on Earth"),
+    ("Scottish glen",       -4.5,  57.0, "timber, rain, and nothing to eat"),
+    ("Congo basin",         15.3,  -4.3, "lush, and terrible soil"),
+    ("Sahara",              10.0,  23.0, "as bad as it sounds"),
+    ("Nile valley",         31.2,  27.0, "desert plus a river"),
+    ("Pampas",             -60.0, -34.0, "grassland, mild winters"),
+    ("Anchorage, Alaska",  -149.9, 61.2, "hard: short season, scurvy country"),
+    ("Ukrainian steppe",    32.0,  49.0, "black earth"),
+)
+
+
+def _ask(prompt: str, default: str = "") -> str:
+    try:
+        got = input(prompt).strip()
+    except (EOFError, KeyboardInterrupt):
+        raise SystemExit(0)
+    return got or default
+
+
+def _pick_place(pal: render.Palette) -> tuple[float, float]:
+    print()
+    for i, (name, lon, lat, note) in enumerate(PLACES, 1):
+        print(f"   {i}) {name:20s} {pal.dim(note)}")
+    print(f"   {len(PLACES)+1}) somewhere else (enter coordinates)")
+    choice = _ask("\n  where? [1] ", "1")
+    if choice.isdigit() and 1 <= int(choice) <= len(PLACES):
+        _, lon, lat, _ = PLACES[int(choice) - 1]
+        return lon, lat
+    lon = float(_ask("  longitude (-180 to 180): ", "-93.5"))
+    lat = float(_ask("  latitude  (-90 to 90):  ", "41.9"))
+    return lon, lat
+
+
+MENU = """
+  1) Play           run a colony, with rivals competing on the same continent
+  2) Watch          let the AI Stewards fight it out, no player
+  3) Survey a place what the ground, climate and soil are really like
+  4) See the world  draw the planet
+  5) See a site     one hectare of it, at one metre per tile
+  6) A firefight    resolve a single engagement
+  q) Quit
+"""
+
+
+def menu(argv_seed: int, no_colour: bool) -> int:
+    """Interactive launcher. Everything here is also a subcommand."""
+    pal = render.Palette(False if no_colour else None)
+    print(pal.bold("\n  PEG"))
+    print("  A colony simulation on the actual Earth, one square metre at a time.")
+    print(pal.dim("  Everything below is also a command, e.g.  peg survey -93.5 41.9"))
+    print(MENU)
+
+    choice = _ask("  what would you like to do? [1] ", "1").lower()
+    argv: list[str] = ["--seed", str(argv_seed)]
+    if no_colour:
+        argv.append("--no-colour")
+
+    if choice in ("q", "quit", "exit"):
+        return 0
+    if choice == "1":
+        lon, lat = _pick_place(pal)
+        argv += ["play", "--lon", str(lon), "--lat", str(lat)]
+    elif choice == "2":
+        years = _ask("  how many years? [25] ", "25")
+        argv += ["observe", "--years", years]
+    elif choice == "3":
+        lon, lat = _pick_place(pal)
+        argv += ["survey", str(lon), str(lat)]
+    elif choice == "4":
+        argv += ["map"]
+    elif choice == "5":
+        lon, lat = _pick_place(pal)
+        argv += ["site", str(lon), str(lat)]
+    elif choice == "6":
+        argv += ["fight"]
+    else:
+        print("  didn't understand that, sorry.")
+        return 1
+    return main(argv)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if getattr(args, "cmd", None) is None:
+        if not sys.stdin.isatty():
+            # Piped or redirected: a menu would hang waiting for input.
+            build_parser().print_help()
+            return 0
+        try:
+            return menu(args.seed, args.no_colour)
+        except KeyboardInterrupt:
+            print("\ninterrupted")
+            return 130
     try:
         return args.func(args)
     except KeyboardInterrupt:

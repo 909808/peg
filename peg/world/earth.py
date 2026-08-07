@@ -15,13 +15,33 @@ Regenerate the file with ``python3 tools/bake_earth.py``.
 from __future__ import annotations
 
 import gzip
+import io
 import json
 import math
 import os
 from dataclasses import dataclass, field
 from functools import lru_cache
+from importlib import resources
 
-DATA_PATH = os.path.join(os.path.dirname(__file__), "earth.json.gz")
+#: Name of the baked dataset, which lives beside this module inside the
+#: package. It is read as a package *resource* rather than opened by path, so
+#: that PEG works when it is installed as a wheel or bundled into a single-file
+#: zipapp -- in both of those, there is no such thing as a file on disk here.
+DATA_NAME = "earth.json.gz"
+
+
+def data_bytes() -> bytes:
+    """Return the raw dataset, wherever the package happens to live."""
+    return resources.files(__package__).joinpath(DATA_NAME).read_bytes()
+
+
+def data_location() -> str:
+    """A human-readable note about where the dataset was found. For
+    diagnostics only -- may not be a real path inside a zipapp."""
+    try:
+        return str(resources.files(__package__).joinpath(DATA_NAME))
+    except Exception:      # pragma: no cover - diagnostics must never raise
+        return f"<{__package__}/{DATA_NAME}>"
 
 Ring = list[tuple[float, float]]
 
@@ -194,12 +214,14 @@ def point_segment_km(lon: float, lat: float, ax: float, ay: float,
 def load() -> EarthData:
     """Load and index the dataset. Cached -- it is immutable and ~15 MB in
     memory once decoded, which is not worth doing twice."""
-    if not os.path.exists(DATA_PATH):
+    try:
+        blob = data_bytes()
+    except (FileNotFoundError, ModuleNotFoundError, OSError) as exc:
         raise FileNotFoundError(
-            f"Earth dataset missing at {DATA_PATH}. "
-            "Run: python3 tools/bake_earth.py"
-        )
-    with gzip.open(DATA_PATH, "rb") as f:
+            f"Earth dataset {DATA_NAME} is missing from the peg.world package. "
+            "Rebuild it with: python3 tools/bake_earth.py"
+        ) from exc
+    with gzip.open(io.BytesIO(blob), "rb") as f:
         raw = json.loads(f.read().decode("utf-8"))
 
     q = float(raw.get("quant", 100))

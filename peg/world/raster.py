@@ -23,6 +23,7 @@ from __future__ import annotations
 import math
 import os
 import struct
+import sys
 from array import array
 from dataclasses import dataclass
 
@@ -34,11 +35,27 @@ GENERATOR_VERSION = 3
 
 DEFAULT_RES = 0.5
 
-CACHE_DIR = os.environ.get(
-    "PEG_CACHE",
-    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__)))), ".cache", "peg"),
-)
+def _default_cache_dir() -> str:
+    """Where to keep built rasters.
+
+    The user's cache directory, not the package directory. An installed
+    package lives somewhere read-only (and a zipapp is not a directory at
+    all), so writing build artefacts next to the code only works when running
+    from a source checkout.
+    """
+    override = os.environ.get("PEG_CACHE")
+    if override:
+        return override
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+        return os.path.join(base, "peg", "cache")
+    if sys.platform == "darwin":
+        return os.path.expanduser("~/Library/Caches/peg")
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    return os.path.join(base, "peg")
+
+
+CACHE_DIR = _default_cache_dir()
 
 _MAGIC = b"PEGR"
 

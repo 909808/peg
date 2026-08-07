@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "peg"
+version = "0.1.0"
+description = "A colony simulation on the actual Earth, one square metre at a time."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+keywords = ["simulation", "game", "colony", "earth", "roguelike", "worldgen"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Games/Entertainment :: Simulation",
+]
+
+# Deliberately empty. PEG runs on the standard library alone, which is what
+# makes "download it and run it" a real option.
+dependencies = []
+
+[project.scripts]
+peg = "peg.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/909808/peg"
+
+[tool.setuptools.packages.find]
+include = ["peg*"]
+
+# The baked Earth dataset must travel with the package. Without this the wheel
+# installs cleanly and then cannot find the planet.
+[tool.setuptools.package-data]
+"peg.world" = ["earth.json.gz"]

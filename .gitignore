@@ -3,6 +3,8 @@ __pycache__/
 *.egg-info/
 .eggs/
 build/
+
+# Built artefacts. Rebuild with: python3 tools/build.py
 dist/
 
 # Generated world rasters and downloaded source data. Both are reproducible:

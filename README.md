@@ -4,15 +4,88 @@ A colony simulation on the actual Earth, one square metre at a time, against
 rival AIs that are playing the same game you are.
 
 ```
-python3 -m peg survey -93.5 41.9      # what is the ground like in Iowa
-python3 -m peg map                    # draw the planet
-python3 -m peg site -4.5 57.0         # draw one hectare of Scotland at 1 m
-python3 -m peg observe                # watch the AI Stewards compete, no player
-python3 -m peg play                   # run a colony
-python3 -m peg fight                  # resolve one firefight
+peg                      # a menu, if you would rather not learn the commands
+peg play                 # run a colony
+peg observe              # watch the AI Stewards fight it out, no player
+peg survey -93.5 41.9    # what the ground is really like in Iowa
+peg map                  # draw the planet
+peg site -4.5 57.0       # one hectare of Scotland, at one metre per tile
+peg fight                # resolve a single firefight
 ```
 
-Python 3.11+. No dependencies, no install, no network. Clone and run.
+Python 3.11 or newer. No dependencies, no network, nothing to configure.
+
+---
+
+## Getting it running
+
+Pick whichever of these sounds least annoying. They all end up in the same
+place.
+
+### 1. Just double-click it
+
+Download the repository, then double-click **`run.sh`** (macOS, Linux) or
+**`run.bat`** (Windows). That is it — the launcher finds your Python and starts
+the game. From a terminal, `./run.sh` does the same thing.
+
+### 2. One file you can copy anywhere
+
+```
+python3 tools/build.py        # writes dist/peg.pyz, about 240 KiB
+python3 dist/peg.pyz          # and that is the whole game
+```
+
+`peg.pyz` is a single file with everything inside it, Earth included. Put it on
+a memory stick, email it to yourself, run it from any folder. Anyone with
+Python 3.11 can run it — they do not need the source, and there is nothing to
+install.
+
+### 3. Install it properly
+
+```
+pip install .
+peg
+```
+
+That gives you a real `peg` command that works from any directory. To keep it
+isolated from the rest of your system — a good habit, and the thing most guides
+mean by "use a virtual environment":
+
+```
+python3 -m venv .venv
+source .venv/bin/activate          # on Windows:  .venv\Scripts\activate
+pip install .
+peg
+```
+
+### 4. Straight from the source folder
+
+```
+python3 -m peg
+```
+
+No install at all, but it only works from inside the project folder.
+
+---
+
+### If something goes wrong
+
+**`python3: command not found`** — you do not have Python yet. Get it from
+[python.org/downloads](https://www.python.org/downloads/). On Windows, tick
+*"Add Python to PATH"* during setup.
+
+**`peg: command not found` after `pip install .`** — the install worked, but the
+folder it put `peg` into is not on your PATH. `python3 -m peg` always works
+instead.
+
+**The first run pauses for a few seconds** — it is building the world raster
+from the Earth data. It is cached afterwards (`~/.cache/peg`, or
+`%LOCALAPPDATA%\peg` on Windows) and every later run starts instantly. Delete
+that folder if you ever want it rebuilt.
+
+**The map looks like mush** — the terminal window is too narrow, or it does not
+do colour. Widen the window, or use `peg --no-colour map` for a plain-text
+version.
 
 ---
 
@@ -148,10 +221,14 @@ peg/meta/world.py     the strategic layer
 peg/game.py           binds the two scales together
 peg/ui/               ANSI rendering and the terminal client
 tools/bake_earth.py   build-time: refresh the Earth dataset (needs network)
+tools/build.py        build-time: bundle everything into dist/peg.pyz
+run.sh, run.bat       double-click launchers
 ```
 
-```
-python3 -m unittest discover -s tests -t .     # 86 tests
+```bash
+python3 -m unittest discover -s tests -t .    # 86 tests
+python3 tools/build.py                        # single-file build
+python3 tools/bake_earth.py                   # refresh Earth data (needs network)
 ```
 
 ## Honest limits
