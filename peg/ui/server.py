@@ -36,6 +36,8 @@ class _Handler(BaseHTTPRequestHandler):
     #: Set by :func:`serve`.
     game = None
     lock = threading.Lock()
+    #: The planet thumbnail never changes; build it once.
+    _cached_minimap = None
 
     protocol_version = "HTTP/1.1"
     server_version = "PEG"
@@ -85,6 +87,10 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json(self._view())
             elif route == "/api/tile":
                 self._json(self._tile())
+            elif route == "/api/site":
+                self._json(self._site())
+            elif route == "/api/minimap":
+                self._json(self._minimap())
             elif route == "/api/health":
                 self._json({"ok": True})
             else:
@@ -124,6 +130,24 @@ class _Handler(BaseHTTPRequestHandler):
             w=self._int(q, "w", 64), h=self._int(q, "h", 64))
         with self.lock:
             return viewdata.tiles(g.colony.map, vp)
+
+    def _site(self) -> dict:
+        """The whole site in one response.
+
+        A 160 m site is 167 KiB packed. Fetching viewports on every pan was
+        the single largest source of interface lag, and entirely unnecessary
+        at that size -- the client now loads once and pans locally.
+        """
+        m = self.game.colony.map
+        with self.lock:
+            m.ensure_all()
+            return viewdata.tiles(m, viewdata.Viewport(0, 0, m.size, m.size))
+
+    def _minimap(self):
+        if self._cached_minimap is None:
+            with self.lock:
+                _Handler._cached_minimap = viewdata.world_minimap(self.game)
+        return self._cached_minimap
 
     def _tile(self) -> dict:
         q = self._query()

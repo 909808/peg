@@ -318,6 +318,8 @@ def status(game) -> dict:
             "beds": c.beds,
             "stores": c.store.summary(),
         },
+        "place": place_name(c.survey.lon, c.survey.lat),
+        "objectives": objectives(game),
         "over": game.over,
         "outcome": game.outcome,
         "log": c.log[-8:],
@@ -334,6 +336,161 @@ def status(game) -> dict:
             for f, score in game.world.standings() if f.alive_settlements
         ],
         "intel": game.intel_text(),
+    }
+
+
+# --------------------------------------------------------------------------
+# orientation
+# --------------------------------------------------------------------------
+
+
+def place_name(lon: float, lat: float) -> dict:
+    """Say where on Earth this is, in words a person can hold on to.
+
+    "57.000N 4.500W" is precise and tells you nothing. The dataset has 711
+    named summits, 895 named river reaches and 225 named physical regions, so
+    the game can say "in the Grampian Mountains, 14 km from the River Spey"
+    instead -- which is the difference between a coordinate and a place.
+    """
+    from ..world import earth as earth_mod
+    data = earth_mod.load()
+
+    regions = [r.name.title() for r in data.regions_at(lon, lat)
+               if r.name and r.kind in ("Range/mtn", "Plateau", "Basin",
+                                        "Plain", "Lowland", "Foothills")]
+
+    peak = None
+    best = 1e9
+    for pk in data.peaks:
+        if not pk.name:
+            continue
+        d = geo.haversine_m(lat, lon, pk.lat, pk.lon) / 1000.0
+        if d < best:
+            best, peak = d, pk
+    peak_txt = (f"{peak.name} ({peak.elev_m} m) {best:.0f} km away"
+                if peak and best < 400 else "")
+
+    river = None
+    rbest = 1e9
+    for riv in data.rivers_near(lon, lat, pad=3):
+        if not riv.name:
+            continue
+        pts = riv.line
+        for i in range(len(pts) - 1):
+            d = earth_mod.point_segment_km(lon, lat, pts[i][0], pts[i][1],
+                                           pts[i + 1][0], pts[i + 1][1])
+            if d < rbest:
+                rbest, river = d, riv
+    river_txt = (f"{river.name}, {rbest:.0f} km away"
+                 if river and rbest < 300 else "")
+
+    return {
+        "region": regions[0] if regions else "",
+        "peak": peak_txt,
+        "river": river_txt,
+        "hemisphere": ("northern" if lat >= 0 else "southern"),
+    }
+
+
+def objectives(game) -> list[dict]:
+    """What to do next, and why.
+
+    A colony sim is opaque until you know what is about to kill you. These are
+    generated from the actual state rather than a scripted tutorial, so they
+    stay useful long after the first hour, and they are ordered by how soon
+    the thing they warn about arrives.
+    """
+    c = game.colony
+    st = c.stats
+    out: list[dict] = []
+
+    def add(urgency, title, why):
+        out.append({"urgency": urgency, "title": title, "why": why})
+
+    if c.water_days < 2:
+        add("now", "Get water",
+            f"{c.water_days:.1f} days on hand. People die of thirst in three.")
+    if c.beds < c.population:
+        add("soon", "Build shelter",
+            f"{c.beds} beds for {c.population} people. Sleeping out costs "
+            f"calories and morale.")
+    if not c.fields:
+        add("now", "Mark a field",
+            f"Nothing is planted. This site supports "
+            f"{c.survey.arable_fraction:.0%} arable ground, and about "
+            f"{c.population * 2400:,} m2 feeds this many people for a year.")
+    food = st.get("food_days", 0)
+    if food < 60:
+        add("now" if food < 25 else "soon", "Find food",
+            f"{food:.0f} days of stores. The next harvest is not close.")
+    hdd = c.survey.heating_degree_days
+    fuel = st.get("fuel_days", 0)
+    if hdd > 1200 and fuel < 60:
+        add("soon", "Cut firewood",
+            f"{fuel:.0f} days of fuel, and this site needs "
+            f"{hdd:,.0f} degree-days of heating a year.")
+    hurt = [p for p in c.alive if any(i.tended < 0 for i in p.injuries)]
+    if hurt:
+        add("now", "Treat the wounded",
+            f"{len(hurt)} untreated. Untended wounds go septic in days.")
+    scurvy = [p for p in c.alive if p.vit_c_debt_days > 40]
+    if scurvy:
+        add("soon", "Get something fresh",
+            f"{len(scurvy)} people are short of vitamin C. Scurvy arrives "
+            f"about 75 days in, and stored grain will not stop it.")
+    if not out:
+        add("later", "Grow",
+            "Nothing is urgent. Expand the fields, build up, and watch the "
+            "neighbours.")
+    order = {"now": 0, "soon": 1, "later": 2}
+    out.sort(key=lambda o: order[o["urgency"]])
+    return out[:4]
+
+
+def world_minimap(game, width: int = 300, height: int = 150) -> dict:
+    """A thumbnail of the planet with everyone on it.
+
+    Answers "where am I" at the only scale that really answers it.
+    """
+    from ..world import raster as raster_mod
+    r = raster_mod.get()
+    lat0, lat1 = -58.0, 78.0
+    px = bytearray(width * height * 3)
+    for j in range(height):
+        lat = lat1 - (j + 0.5) / height * (lat1 - lat0)
+        for i in range(width):
+            lon = -180.0 + (i + 0.5) / width * 360.0
+            idx = r.index(lon, lat)
+            k = (j * width + i) * 3
+            if r.glacier[idx]:
+                px[k:k+3] = bytes((228, 234, 240))
+            elif r.land[idx]:
+                e = r.elev[idx]
+                if e > 2200:   c = (150, 130, 108)
+                elif e > 900:  c = (122, 112, 82)
+                else:          c = (86, 100, 62)
+                px[k:k+3] = bytes(c)
+            else:
+                d = min(1.0, max(0.0, -r.elev[idx] / 5000.0))
+                px[k:k+3] = bytes((int(28 - 12*d), int(52 - 20*d), int(96 - 30*d)))
+
+    def to_px(lon, lat):
+        return [round((lon + 180.0) / 360.0 * width, 1),
+                round((lat1 - lat) / (lat1 - lat0) * height, 1)]
+
+    marks = []
+    for f in game.world.factions:
+        if f.eliminated:
+            continue
+        for st in f.alive_settlements:
+            xy = to_px(st.lon, st.lat)
+            marks.append({"x": xy[0], "y": xy[1], "player": f.is_player,
+                          "name": f"{f.name} - {st.name}"})
+    return {
+        "w": width, "h": height,
+        "rgb": base64.b64encode(bytes(px)).decode("ascii"),
+        "marks": marks,
+        "you": to_px(game.colony.survey.lon, game.colony.survey.lat),
     }
 
 
