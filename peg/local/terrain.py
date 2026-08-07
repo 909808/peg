@@ -251,7 +251,7 @@ class LocalMap:
 
     __slots__ = ("survey", "frame", "size", "seed", "terrain", "elev_cm",
                  "fertility", "obj_kind", "objects", "_gen", "datum_m",
-                 "_aspect", "_slope_rise")
+                 "_aspect", "_slope_rise", "_complete")
 
     def __init__(self, survey: site_mod.Survey, size: int = 192, seed: int = 0):
         self.survey = survey
@@ -267,6 +267,7 @@ class LocalMap:
         self.obj_kind = bytearray(n)
         self.objects: dict[int, object] = {}
         self._gen: set[tuple[int, int]] = set()
+        self._complete = False
         self.datum_m = survey.elev_m
 
         # Slope direction and magnitude for the whole site, from the world
@@ -368,7 +369,21 @@ class LocalMap:
     def line_of_sight(self, x0: int, y0: int, x1: int, y1: int) -> bool:
         """Bresenham with elevation. Terrain between two points blocks sight
         if it is high enough to interrupt the straight line between them --
-        which is why shooting uphill is a bad idea."""
+        which is why shooting uphill is a bad idea, and why a colony sited on
+        a reverse slope is invisible until the enemy is on top of it.
+
+        This is the hottest function in a firefight, so it reads the tile
+        arrays directly rather than going through the accessors.
+        """
+        self.ensure(x0, y0)
+        self.ensure(x1, y1)
+        size = self.size
+        okind = self.obj_kind
+        objs = self.objects
+        elev = self.elev_cm
+        cliff_id = CLIFF.id
+        terr = self.terrain
+
         dx = abs(x1 - x0)
         dy = abs(y1 - y0)
         sx = 1 if x0 < x1 else -1
@@ -376,16 +391,10 @@ class LocalMap:
         err = dx - dy
         x, y = x0, y0
         dist = max(1.0, math.hypot(x1 - x0, y1 - y0))
-        z0 = self.elevation_at(x0, y0) + 1.5     # eye height
-        z1 = self.elevation_at(x1, y1) + 0.9     # centre of mass
+        z0 = elev[y0 * size + x0] + 150.0     # eye height, centimetres
+        z1 = elev[y1 * size + x1] + 90.0      # centre of mass
+
         while True:
-            if (x, y) != (x0, y0) and (x, y) != (x1, y1):
-                if self.blocks_sight(x, y):
-                    return False
-                t = math.hypot(x - x0, y - y0) / dist
-                ray_z = z0 + (z1 - z0) * t
-                if self.elevation_at(x, y) > ray_z + 0.4:
-                    return False
             if x == x1 and y == y1:
                 return True
             e2 = 2 * err
@@ -395,12 +404,35 @@ class LocalMap:
             if e2 < dx:
                 err += dx
                 y += sy
-            if not self.in_bounds(x, y):
+            if x < 0 or y < 0 or x >= size or y >= size:
+                return False
+            if x == x1 and y == y1:
+                return True
+
+            self.ensure(x, y)
+            i = y * size + x
+            k = okind[i]
+            if k:
+                if k == OBJ_BOULDER:
+                    return False
+                if k == OBJ_PLANT:
+                    if objs[i].blocks_sight:
+                        return False
+                elif k == OBJ_BUILDING:
+                    if getattr(objs.get(i), "blocks", True):
+                        return False
+            elif terr[i] == cliff_id:
+                return False
+
+            t = math.hypot(x - x0, y - y0) / dist
+            if elev[i] > z0 + (z1 - z0) * t + 40.0:
                 return False
 
     # ---- generation ----
 
     def ensure(self, x: int, y: int) -> None:
+        if self._complete:
+            return
         key = (x // CHUNK, y // CHUNK)
         if key not in self._gen:
             self._gen.add(key)
@@ -412,6 +444,10 @@ class LocalMap:
                 if (cx, cy) not in self._gen:
                     self._gen.add((cx, cy))
                     self._gen_chunk(cx, cy)
+        # Lets ensure() short-circuit. Line of sight walks a hundred tiles per
+        # call, several times a second per fighter, and the chunk lookup was
+        # costing more than the visibility maths.
+        self._complete = True
 
     def _gen_chunk(self, cx: int, cy: int) -> None:
         s = self.survey
