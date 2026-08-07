@@ -198,6 +198,11 @@ BLOOD_ML = 5000.0
 #: pawn is merely hungry and will go and eat; above it, they could not.
 FAT_MOBILISE_KCAL = 2600.0
 
+#: Skin temperature. Above this the body cannot shed heat by conduction and
+#: must sweat instead. Unlike the cold threshold this barely depends on
+#: clothing, because people take clothing off.
+HEAT_NEUTRAL_C = 33.0
+
 
 @dataclass
 class Pawn:
@@ -233,7 +238,7 @@ class Pawn:
     dead: bool = False
     cause_of_death: str = ""
     #: Insulation currently worn, in clo. 1.0 is a business suit, 4 is arctic.
-    clothing_clo: float = 0.9
+    clothing_clo: float = 1.2
     #: Suppression from incoming fire, 0-1. Decays over seconds.
     suppression: float = 0.0
     job: str = ""
@@ -422,7 +427,8 @@ class Pawn:
         return base * activity + thermal
 
     def tick(self, minutes: float, temp_c: float, work_fraction: float,
-             is_night: bool, rand: rng.Rng) -> list[str]:
+             is_night: bool, rand: rng.Rng,
+             humidity: float = 0.5) -> list[str]:
         """Advance the body by ``minutes``. Returns notable events."""
         if self.dead:
             return []
@@ -498,7 +504,7 @@ class Pawn:
             ev.append(f"{self.name} is collapsing from exhaustion")
 
         # --- temperature --------------------------------------------------
-        self._tick_thermal(minutes, temp_c, work_fraction)
+        self._tick_thermal(minutes, temp_c, work_fraction, humidity)
         if self.core_temp_c < 28.0:
             self.dead = True
             self.cause_of_death = "hypothermia"
@@ -530,24 +536,44 @@ class Pawn:
         return ev
 
     def _tick_thermal(self, minutes: float, ambient_c: float,
-                      work_fraction: float) -> None:
+                      work_fraction: float, humidity: float = 0.5) -> None:
         """Core temperature drifts towards equilibrium with the environment.
 
-        A clothed adult in still air is comfortable down to about 20 C; below
-        that the body loses heat faster than metabolism replaces it, and the
-        core starts to fall. Working generates heat, which is why activity
-        keeps you alive in the cold and kills you in humid heat.
+        Thermoregulation is strongly asymmetric and modelling it symmetrically
+        is wrong in a way that kills people: a colonist in an Iowa June came
+        out at 41.9 C and died of heatstroke on a pleasant summer day.
+
+        Cold side: the body can only generate so much heat, so a large deficit
+        pulls the core down until it stops. Insulation and hard work are the
+        two defences, which is what makes clothing and firewood strategic.
+
+        Heat side: sweating holds the core almost exactly at 37 C across a
+        very wide band, and then fails abruptly when the air is too humid to
+        evaporate into. That cliff -- not the temperature itself -- is what
+        makes humid heat lethal, and it is why 45 C in the Sahara is survivable
+        and 40 C in a monsoon is not.
         """
         clo = self.clothing_clo * self.mod("cold_tolerance")
-        neutral = 27.0 - 6.5 * clo
         metabolic = 1.4 + 3.2 * work_fraction
-        # Degrees per hour the core would move towards ambient.
-        drive = (ambient_c - neutral) * 0.055 + metabolic * 0.28
-        if ambient_c > 30:
-            # Above skin temperature the body can only shed heat by sweating,
-            # and humidity decides whether that works.
-            drive += (ambient_c - 30.0) * 0.09 * (1.0 / self.mod("heat_tolerance"))
-        target = 37.0 + rng.clamp(drive, -14.0, 8.0)
+        cold_neutral = 27.0 - 6.5 * clo
+
+        if ambient_c <= cold_neutral:
+            drive = (ambient_c - cold_neutral) * 0.18 + metabolic * 0.55
+        else:
+            # Evaporative capacity, in degrees of excess heat the body can
+            # shed. Collapses as the air saturates.
+            capacity = 16.0 * (1.0 - 0.80 * rng.clamp01(humidity))
+            capacity *= self.mod("heat_tolerance")
+            capacity *= max(0.35, 1.0 - 0.25 * work_fraction)
+            # Clothing you cannot take off also impedes evaporation.
+            capacity *= max(0.5, 1.0 - 0.10 * max(0.0, clo - 1.0))
+            excess = max(0.0, ambient_c - HEAT_NEUTRAL_C - capacity)
+            drive = excess * 0.30 + metabolic * 0.12
+            if self.water_debt_l > 2.0:
+                # You cannot sweat what you have not drunk.
+                drive += (self.water_debt_l - 2.0) * 0.6
+
+        target = 37.0 + rng.clamp(drive, -16.0, 8.0)
         rate = min(1.0, minutes / 60.0 * 0.55)
         self.core_temp_c += (target - self.core_temp_c) * rate
         self.core_temp_c = rng.clamp(self.core_temp_c, 20.0, 45.0)

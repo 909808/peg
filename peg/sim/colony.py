@@ -452,6 +452,7 @@ class Colony:
         hour = self.minute_of_day / 60.0
         is_night = hour < 6.0 or hour > 20.5
         temp = self.indoor_temp()
+        self._issue_clothing()
 
         # Assign and perform work.
         self.work_today.setdefault("_", 0.0)
@@ -469,7 +470,8 @@ class Colony:
             body_temp = self.weather.temp_c if outside else temp
             if outside and self.weather.wind_ms > 2:
                 body_temp = items.wind_chill_c(body_temp, self.weather.wind_ms)
-            evs = p.tick(minutes, body_temp, work_frac, is_night, r)
+            evs = p.tick(minutes, body_temp, work_frac, is_night, r,
+                         humidity=self.weather.humidity)
             for e in evs:
                 self.note(e)
             if p.dead:
@@ -480,6 +482,21 @@ class Colony:
         self._tick_crops(minutes)
         self._tick_stores(minutes, temp)
         self._burn_fuel(minutes)
+
+    def _issue_clothing(self) -> None:
+        """Dress the colony out of its own stores.
+
+        Insulation is measured in clo: 1 is an office suit, 2 a winter coat,
+        4 polar gear. A colony with cloth and leather in the store puts it on
+        people, which is the difference between a survivable January and a
+        fatal one -- and is why cloth is worth weaving before it is worth
+        trading.
+        """
+        pop = max(1, self.population)
+        stock = self.store.amount("cloth") + self.store.amount("leather") * 1.4
+        clo = 1.0 + min(2.1, stock / (pop * 4.0))
+        for p in self.alive:
+            p.clothing_clo = clo
 
     def _start_day(self, r: rng.Rng) -> None:
         self.weather = daily_weather(self.survey.clim, self.day, self.seed)
@@ -543,8 +560,24 @@ class Colony:
                 best = job
         return best
 
+    #: Below this apparent temperature, outdoor work stops. People go inside;
+    #: colonies that did not have this froze to death cutting firewood they
+    #: were about to burn.
+    OUTDOOR_WORK_FLOOR_C = -18.0
+
+    #: And an upper limit. Apparent temperature, so humidity counts.
+    OUTDOOR_WORK_CEILING_C = 44.0
+
+    def _outdoor_safe(self) -> bool:
+        felt_cold = items.wind_chill_c(self.weather.temp_c, self.weather.wind_ms)
+        felt_hot = items.heat_index_c(self.weather.temp_c, self.weather.humidity)
+        return (felt_cold > self.OUTDOOR_WORK_FLOOR_C
+                and felt_hot < self.OUTDOOR_WORK_CEILING_C)
+
     def _urgency(self, job: str, p: Pawn) -> float:
         s = self.stats
+        if job in ("chop", "farm", "forage", "mine") and not self._outdoor_safe():
+            return 0.0
         if job == "doctor":
             bleeding = sum(1 for q in self.alive
                            if q.bleeding_ml_min > 0 or
@@ -747,9 +780,10 @@ class Colony:
                 return
             if f.crop is None:
                 # Sow, if anything will ripen in the time left this year.
-                gdd_left = self._gdd_remaining()
-                options = items.best_crops(gdd_left, clim.coldest,
-                                           clim.annual_precip)
+                # How much of the year's heat is still ahead of us decides
+                # whether sowing now is worth the seed.
+                fraction = self._season_remaining()
+                options = items.best_crops(clim, season_fraction=fraction)
                 if not options:
                     continue
                 crop = options[0][0]
@@ -765,18 +799,22 @@ class Colony:
                 p.learn("farming", eff)
                 return
 
-    def _gdd_remaining(self) -> float:
-        """Growing degree-days left before the season ends. This is what
-        decides whether sowing in July is worth the seed."""
+    def _season_remaining(self) -> float:
+        """Fraction of the year's growing heat still ahead of us.
+
+        Decides whether sowing in July is worth the seed -- above the tropics
+        it usually is not.
+        """
         clim = self.survey.clim
-        total = 0.0
+        ahead = 0.0
         for d in range(self.day, self.day + 365):
             t = clim.temp_on_day(d % 365)
             if t < 0 and d > self.day + 30:
                 break
             if t > 5:
-                total += min(30.0, t) - 5.0
-        return total
+                ahead += min(30.0, t) - 5.0
+        whole = max(1.0, clim.growing_degree_days(base=5.0))
+        return min(1.0, ahead / whole)
 
     def _harvest_yield(self, f: Field) -> float:
         if not f.crop:

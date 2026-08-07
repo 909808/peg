@@ -293,16 +293,31 @@ CROPS: dict[str, Crop] = {c.key: c for c in (
     Crop("beans", "beans", "beans", 1400, 8.0, 0.0, 0.28, 400),
     Crop("cabbage", "cabbage", "vegetables", 900, 4.0, -6.0, 3.40, 380),
     Crop("flax", "flax", "fibre", 1250, 5.0, -4.0, 0.75, 400),
+    # Cool-climate staples. Without these, maritime and subarctic sites
+    # support no crop at all and every colony founded on one starves.
+    Crop("oats", "oats", "grain", 950, 4.0, -8.0, 0.32, 420),
+    Crop("rye", "rye", "grain", 1000, 2.0, -14.0, 0.30, 320),
+    Crop("turnip", "turnips", "vegetables", 550, 3.0, -6.0, 3.00, 340),
 )}
 
 
-def crop_suitability(crop: Crop, gdd: float, coldest_c: float,
-                     precip_mm: float, irrigated: bool = False) -> float:
+def crop_suitability(crop: Crop, clim, irrigated: bool = False,
+                     gdd_available: float | None = None) -> float:
     """How well a crop suits a climate, 0-1.
 
     Zero means it will not ripen at all -- which is the correct answer for
     maize north of the treeline no matter how much labour you throw at it.
+
+    Growing degree-days are accumulated at *this crop's* base temperature.
+    Comparing every crop against a single figure computed at 10 C was wrong
+    in a way that mattered enormously: rye starts growing at 2 C and barley at
+    3, so a cool maritime climate that really does support both scored zero
+    for everything and starved colonies that had no business starving.
     """
+    gdd = (clim.growing_degree_days(base=crop.base_c)
+           if gdd_available is None else gdd_available)
+    coldest_c = clim.coldest
+    precip_mm = clim.annual_precip
     if gdd < crop.gdd_needed:
         return 0.0
     if coldest_c < crop.frost_kill_c - 6.0 and not irrigated:
@@ -340,10 +355,17 @@ def crop_value_per_m2(c: Crop, suitability: float) -> float:
     return suitability * kcal_m2 * keep * vit
 
 
-def best_crops(gdd: float, coldest_c: float, precip_mm: float,
-               irrigated: bool = False) -> list[tuple[Crop, float]]:
-    out = [(c, crop_suitability(c, gdd, coldest_c, precip_mm, irrigated))
-           for c in CROPS.values()]
+def best_crops(clim, irrigated: bool = False,
+               season_fraction: float = 1.0) -> list[tuple[Crop, float]]:
+    """Rank the crops worth sowing in a climate, best first.
+
+    ``season_fraction`` scales the heat available, for deciding whether it is
+    too late in the year to sow at all.
+    """
+    out = []
+    for c in CROPS.values():
+        gdd = clim.growing_degree_days(base=c.base_c) * season_fraction
+        out.append((c, crop_suitability(c, clim, irrigated, gdd_available=gdd)))
     out = [(c, s) for c, s in out if s > 0.05]
     out.sort(key=lambda cs: -crop_value_per_m2(cs[0], cs[1]))
     return out

@@ -60,16 +60,31 @@ class Survey:
 
     @property
     def arable_fraction(self) -> float:
-        """Share of the surrounding land that could be cropped, accounting for
-        slope, soil depth and growing season."""
+        """Share of the surrounding land that could be cropped.
+
+        Four gates, and water is the one people forget. The Sahara has soil
+        with a respectable nutrient rating and a 365-day growing season, and is
+        of course not farmland, because 157 mm of rain will not raise a crop.
+        Beside a river it is some of the best farmland on Earth -- which is the
+        entire history of Egypt, and falls straight out of the same rule.
+        """
         if not self.soil.arable:
             return 0.0
-        f = self.soil.fertility
-        f *= rng.clamp01(1.0 - self.slope_deg / 25.0)
         gd = self.clim.growing_days
         if gd < 90:
             return 0.0
+        f = self.soil.fertility
+        f *= rng.clamp01(1.0 - self.slope_deg / 25.0)
         f *= rng.clamp01(gd / 200.0)
+
+        # A cereal crop wants roughly 420 mm over its season. Surface water
+        # within a few kilometres means it can be irrigated instead.
+        water = rng.clamp01(self.clim.annual_precip / 420.0)
+        if self.river_km < 5.0 or self.lake_km < 5.0:
+            water = max(water, 0.85)
+        elif self.river_km < 15.0:
+            water = max(water, 0.55)
+        f *= water
         return rng.clamp01(f)
 
     @property
@@ -390,7 +405,16 @@ def score(s: Survey, doctrine: str = "agrarian") -> tuple[float, dict[str, float
     w = DOCTRINE_WEIGHTS.get(doctrine, DOCTRINE_WEIGHTS["agrarian"])
     total = sum(parts[k] * w[k] for k in parts)
     denom = sum(w.values())
-    return 100.0 * total / denom, parts
+    score_out = 100.0 * total / denom
+
+    # Food is not just another weighted component -- it is a precondition.
+    # Weighted alone, an industrial doctrine will happily settle a mineral-rich
+    # site that cannot feed a single person, and then starve on top of the ore.
+    # So the food term also multiplies the whole score, and a site with nothing
+    # edible is worth a fraction of what its other virtues suggest.
+    viability = 0.22 + 0.78 * min(1.0, parts["food"] / 0.30)
+    parts["viability"] = viability
+    return score_out * viability, parts
 
 
 def _climate_livability(s: Survey) -> float:
