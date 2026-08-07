@@ -155,10 +155,46 @@ prone. Adding posture and manoeuvre took it to 42–96 seconds and, more
 interestingly, made terrain matter — the same engagement is a bloodbath in
 woodland and a suppression contest on open prairie.
 
+## The GUI, and why it is a browser
+
+A desktop toolkit was the obvious choice and the wrong one. Tk is in the
+standard library but is missing from a surprising number of Linux installs,
+cannot be tested on a headless machine, and looks like 1995. A browser is on
+every machine that exists, draws to a canvas at sixty frames a second, and
+costs nothing, because ``http.server`` is stdlib too.
+
+So ``peg gui`` starts a localhost server and opens a page. It is not a web
+application; it is a rendering surface that happens to speak HTTP.
+
+Three decisions worth recording:
+
+**The axis boundary is one module.** PEG's simulation stores local tiles as
+``(x, y)`` with elevation separate, which is fine internally and confusing the
+moment you add a vertical view. ``peg/ui/viewdata.py`` is the single place the
+two conventions meet: below it, tiles are ``(x, y)``; above it, everything is
+world X (east), Z (north) and Y (up). Nothing else in the codebase has to
+think about it, and a test asserts that +X really goes east and +Z really goes
+north, because transposing a map looks exactly like a worldgen bug.
+
+**Tiles go over as packed bytes, not JSON.** A 192 m site is 36,864 tiles. As
+JSON objects that is several megabytes of punctuation; as five packed bytes per
+tile (terrain, object class, object height in decimetres, elevation in
+centimetres) it is 184 KiB, base64 included.
+
+**Object heights are real metres.** The cross-sections draw them to scale,
+which is the entire reason they exist. It also makes the payload
+self-validating: a slice across a 620 stems/hectare conifer forest shows about
+thirteen trees per 160 m, which is what that density means.
+
 ## Things deliberately left out
 
 - **Real-time play.** The interesting decisions are ones you want to think
-  about. A clock that runs while you think converts them into reflexes.
+  about. A clock that runs while you think converts them into reflexes. The GUI
+  advances in explicit steps for the same reason.
+- **A true 3D view.** The two cross-sections give you the vertical information
+  that matters -- slope, tree height, soil depth, line of sight -- without
+  needing a camera, a mesh pipeline or WebGL. A voxel renderer would be a much
+  larger project and would not answer a question the sections do not.
 - **Tech trees with fictional tiers.** Research is five branches of real
   capability (agriculture, metallurgy, medicine, firearms, logistics) that
   modify real coefficients.

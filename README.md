@@ -5,7 +5,8 @@ rival AIs that are playing the same game you are.
 
 ```
 peg                      # a menu, if you would rather not learn the commands
-peg play                 # run a colony
+peg gui                  # the graphical client, in your browser
+peg play                 # the same game, in a terminal
 peg observe              # watch the AI Stewards fight it out, no player
 peg survey -93.5 41.9    # what the ground is really like in Iowa
 peg map                  # draw the planet
@@ -88,6 +89,46 @@ do colour. Widen the window, or use `peg --no-colour map` for a plain-text
 version.
 
 ---
+
+## The interface
+
+`peg gui` opens a graphical client in your browser. No install, no toolkit —
+PEG runs a small local server and the browser is the window.
+
+**Axes are X / Z / Y.** X is east, Z is north, **Y is up**. The default view is
+the **X/Z plane**, top-down, looking at the ground. The switch at the top left
+(or <kbd>Tab</kbd>) changes the coordinate plane to one of two elevation views:
+
+| view | what it shows |
+|---|---|
+| **X / Z** | top-down. The ground, hillshaded, with trees, boulders, ore, buildings, fields and people. |
+| **X / Y** | a cross-section looking north, cut at a chosen Z. |
+| **Z / Y** | a cross-section looking east, cut at a chosen X. |
+
+The elevation views are drawn to scale in metres, which is where "one metre per
+tile" stops being a claim and starts being visible: a 28 m spruce next to a
+1.7 m colonist, on ground that actually slopes, over a soil horizon of the
+depth the soil model says it has, on bedrock. `[` and `]` walk the cutting
+plane through the site.
+
+Clicking any tile in the top-down view reports what is on it and **where on
+Earth it is** — down to that individual square metre:
+
+```
+X / Z            30, 31
+Y (elevation)    135.93 m
+lat / lon        56.99956, -4.500823
+terrain          soil
+fertility        0.28
+```
+
+Controls: <kbd>WASD</kbd> or arrows to pan, <kbd>+</kbd>/<kbd>−</kbd> or the
+wheel to zoom, drag to pan, <kbd>Tab</kbd> to switch plane, click to inspect.
+The metre grid appears once you are zoomed in far enough for it to mean
+something.
+
+There is still a full terminal client (`peg play`) — it is genuinely useful
+over SSH, and it is what the headless `peg observe` mode is built on.
 
 ## The premise
 
@@ -219,14 +260,18 @@ peg/meta/faction.py   factions, doctrines, settlements
 peg/meta/steward.py   the rival planner
 peg/meta/world.py     the strategic layer
 peg/game.py           binds the two scales together
-peg/ui/               ANSI rendering and the terminal client
+peg/ui/render.py      ANSI rendering for the terminal client
+peg/ui/app.py         the terminal client
+peg/ui/viewdata.py    payload builders for the GUI (X/Z/Y axis boundary)
+peg/ui/server.py      the GUI's local HTTP server
+peg/ui/web/           the browser client: one page, canvas, no dependencies
 tools/bake_earth.py   build-time: refresh the Earth dataset (needs network)
 tools/build.py        build-time: bundle everything into dist/peg.pyz
 run.sh, run.bat       double-click launchers
 ```
 
 ```bash
-python3 -m unittest discover -s tests -t .    # 86 tests
+python3 -m unittest discover -s tests -t .    # 104 tests
 python3 tools/build.py                        # single-file build
 python3 tools/bake_earth.py                   # refresh Earth data (needs network)
 ```

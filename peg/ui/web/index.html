@@ -1,0 +1,684 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>PEG</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%2312140f'/><rect x='2' y='9' width='12' height='5' fill='%236e5842'/><circle cx='6' cy='6' r='3' fill='%23305c3c'/></svg>">
+<style>
+  :root {
+    --bg:#12140f; --panel:#191c15; --line:#2b3024; --ink:#d8dcc8;
+    --dim:#8b917a; --hot:#d98b4a; --good:#8fb552; --bad:#c4553f; --acc:#c9a227;
+  }
+  * { box-sizing:border-box; }
+  html,body { height:100%; margin:0; }
+  body {
+    background:var(--bg); color:var(--ink); overflow:hidden;
+    font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  #app { display:flex; height:100vh; }
+  #stage { flex:1; position:relative; min-width:0; }
+  canvas { display:block; width:100%; height:100%; cursor:crosshair; }
+
+  #side {
+    width:330px; flex:none; background:var(--panel);
+    border-left:1px solid var(--line); overflow-y:auto; padding:12px 14px;
+  }
+  h2 { font-size:11px; letter-spacing:.14em; text-transform:uppercase;
+       color:var(--dim); margin:16px 0 6px; font-weight:600; }
+  h2:first-child { margin-top:0; }
+
+  .row { display:flex; justify-content:space-between; gap:10px; padding:1px 0; }
+  .row span:last-child { color:#fff; }
+  .dim { color:var(--dim); }
+
+  .bar { height:6px; background:#000; border-radius:3px; overflow:hidden; margin:3px 0 7px; }
+  .bar > i { display:block; height:100%; }
+
+  #hud {
+    position:absolute; top:10px; left:10px; right:10px;
+    display:flex; gap:8px; align-items:center; flex-wrap:wrap; pointer-events:none;
+  }
+  #hud > * { pointer-events:auto; }
+  .chip {
+    background:rgba(12,14,10,.9); border:1px solid var(--line);
+    padding:5px 9px; border-radius:4px; white-space:nowrap;
+  }
+  button {
+    font:inherit; color:var(--ink); background:#20241a; cursor:pointer;
+    border:1px solid var(--line); padding:5px 10px; border-radius:4px;
+  }
+  button:hover { background:#2c3122; border-color:#454c38; }
+  button[aria-pressed="true"] { background:var(--acc); color:#141609; border-color:var(--acc); font-weight:700; }
+  button:disabled { opacity:.4; cursor:default; }
+
+  #planes { display:flex; gap:0; }
+  #planes button { border-radius:0; border-right-width:0; }
+  #planes button:first-child { border-radius:4px 0 0 4px; }
+  #planes button:last-child { border-radius:0 4px 4px 0; border-right-width:1px; }
+
+  #scalebar {
+    position:absolute; left:12px; bottom:12px;
+    background:rgba(12,14,10,.9); border:1px solid var(--line);
+    padding:5px 9px; border-radius:4px; font-size:11px;
+  }
+  #scalebar i { display:block; height:4px; border:1px solid var(--ink);
+                border-top:none; margin-top:3px; }
+  #keys { position:absolute; right:12px; bottom:12px; color:var(--dim);
+          font-size:11px; text-align:right; line-height:1.7; }
+
+  #log { font-size:11px; color:var(--dim); }
+  #log div { padding:1px 0; border-bottom:1px solid #20241a; }
+  table { width:100%; border-collapse:collapse; font-size:11px; }
+  td { padding:2px 3px; vertical-align:top; }
+  .me { color:var(--acc); font-weight:700; }
+  #intel { font-size:10.5px; color:var(--dim); }
+  #intel div { padding:3px 0; border-bottom:1px solid #20241a; }
+  #over { position:absolute; inset:0; display:none; place-items:center;
+          background:rgba(8,9,6,.86); font-size:16px; text-align:center; padding:40px; }
+</style>
+
+<div id="app">
+  <div id="stage">
+    <canvas id="c"></canvas>
+    <div id="hud">
+      <div id="planes"></div>
+      <div class="chip" id="clock">—</div>
+      <div class="chip" id="wx">—</div>
+      <button id="step" title="advance one hour">+1 hour</button>
+      <button id="day" title="advance one day">+1 day</button>
+      <button id="week">+7 days</button>
+      <div class="chip" id="slice" hidden></div>
+    </div>
+    <div id="scalebar"></div>
+    <div id="keys">
+      WASD / arrows &nbsp;pan<br>
+      + &minus; &nbsp;zoom &nbsp;&nbsp; Tab&nbsp;switch plane<br>
+      click&nbsp;inspect &nbsp;&nbsp; [ ]&nbsp;move slice
+    </div>
+    <div id="over"><div id="overtext"></div></div>
+  </div>
+
+  <div id="side">
+    <h2>Site</h2>
+    <div id="site"></div>
+    <h2>Colony</h2>
+    <div id="colony"></div>
+    <h2 id="tileh" hidden>Tile</h2>
+    <div id="tile"></div>
+    <h2>Networks</h2>
+    <table id="standings"></table>
+    <h2>Intercepted planning</h2>
+    <div id="intel"></div>
+    <h2>Log</h2>
+    <div id="log"></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------------
+// Axes.  X = east, Z = north, Y = up.  The top-down view is the X/Z plane;
+// the two cross-sections put Y on the vertical.  The server speaks the same
+// convention, so nothing is flipped anywhere in this file.
+// ---------------------------------------------------------------------------
+
+const cv = document.getElementById("c");
+const ctx = cv.getContext("2d", { alpha:false });
+
+const S = {
+  plane: "xz",
+  scale: 6,            // pixels per metre
+  camX: 0, camZ: 0,    // top-left of the view, in metres
+  slice: 0,            // which row/column the cross-section cuts through
+  legend: null,
+  view: null,          // packed tile arrays
+  status: null,
+  actors: [], structures: [], fields: [],
+  sel: null,
+  busy: false,
+};
+
+const api = async (path, opts) => {
+  const r = await fetch(path, opts);
+  if (!r.ok) throw new Error(path + " -> " + r.status);
+  return r.json();
+};
+const unb64 = s => {
+  const bin = atob(s), out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+};
+
+// ---------------------------------------------------------------------------
+// data
+// ---------------------------------------------------------------------------
+
+async function loadLegend() {
+  S.legend = await api("/api/legend");
+  const box = document.getElementById("planes");
+  box.innerHTML = "";
+  for (const p of S.legend.planes) {
+    const b = document.createElement("button");
+    b.textContent = p.label;
+    b.title = "switch coordinate plane (Tab)";
+    b.onclick = () => setPlane(p.id);
+    b.dataset.plane = p.id;
+    box.appendChild(b);
+  }
+}
+
+function viewportTiles() {
+  // How many metres fit on screen, plus a margin so panning is not jumpy.
+  const w = Math.ceil(cv.width / S.scale) + 2;
+  const h = Math.ceil(cv.height / S.scale) + 2;
+  return { w, h };
+}
+
+async function loadView() {
+  const size = S.status ? S.status.site.size_m : 160;
+  let x0, z0, w, h;
+  if (S.plane === "xz") {
+    const vp = viewportTiles();
+    w = Math.min(vp.w, size); h = Math.min(vp.h, size);
+    x0 = clamp(Math.round(S.camX), 0, size - w);
+    z0 = clamp(Math.round(S.camZ), 0, size - h);
+  } else {
+    // A cross-section needs one full line of tiles, plus a little depth so the
+    // slice indicator has context.
+    if (S.plane === "xy") { x0 = 0; w = size; z0 = clamp(S.slice, 0, size-1); h = 1; }
+    else                  { z0 = 0; h = size; x0 = clamp(S.slice, 0, size-1); w = 1; }
+  }
+  S.view = await api(`/api/view?x0=${x0}&z0=${z0}&w=${w}&h=${h}`);
+  S.view.terrainA = unb64(S.view.terrain);
+  S.view.objA     = unb64(S.view.obj);
+  S.view.objhA    = unb64(S.view.objh);
+  S.view.yA       = new Int16Array(unb64(S.view.y).buffer);
+}
+
+async function loadStatus() {
+  const d = await api("/api/status");
+  S.status = d.status;
+  S.actors = d.actors; S.structures = d.structures; S.fields = d.fields;
+  paintPanels();
+}
+
+// ---------------------------------------------------------------------------
+// drawing
+// ---------------------------------------------------------------------------
+
+const clamp = (v,a,b) => v < a ? a : (v > b ? b : v);
+const rgb = a => `rgb(${a[0]},${a[1]},${a[2]})`;
+const shade = (a, f) => `rgb(${clamp(a[0]*f|0,0,255)},${clamp(a[1]*f|0,0,255)},${clamp(a[2]*f|0,0,255)})`;
+
+function terrRGB(i) {
+  const key = S.legend.terrain_order[i];
+  return S.legend.terrain[key].rgb;
+}
+function isWater(i) {
+  return S.legend.terrain[S.legend.terrain_order[i]].water;
+}
+
+function resize() {
+  const r = cv.getBoundingClientRect();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  cv.width = Math.max(1, r.width * dpr | 0);
+  cv.height = Math.max(1, r.height * dpr | 0);
+}
+
+function draw() {
+  if (!S.legend || !S.view) return;
+  ctx.fillStyle = "#0b0d08";
+  ctx.fillRect(0, 0, cv.width, cv.height);
+  if (S.plane === "xz") drawTopDown(); else drawSection();
+  drawScaleBar();
+}
+
+// --- top-down: the ground plane -------------------------------------------
+
+function drawTopDown() {
+  const v = S.view, s = S.scale;
+  const ox = (v.x0 - S.camX) * s, oz = (v.z0 - S.camZ) * s;
+
+  for (let j = 0; j < v.h; j++) {
+    for (let i = 0; i < v.w; i++) {
+      const k = j * v.w + i;
+      const base = terrRGB(v.terrainA[k]);
+
+      // Hillshade from the height gradient. Relief is invisible on a flat
+      // colour map, and this is a game where a 6-degree slope decides where
+      // the water goes.
+      let f = 1;
+      if (i > 0 && j > 0) {
+        const dzx = v.yA[k] - v.yA[k - 1];
+        const dzy = v.yA[k] - v.yA[k - v.w];
+        f = clamp(1 + (dzx * 0.9 + dzy * 0.9) / 260, 0.62, 1.38);
+      }
+      // A little deterministic per-tile variation. Real ground is not one
+      // flat colour, and without this a hectare of soil looks like a bitmap.
+      const gx = v.x0 + i, gz = v.z0 + j;
+      const n = ((gx * 73856093) ^ (gz * 19349663)) & 255;
+      ctx.fillStyle = shade(base, f * (0.94 + n / 255 * 0.12));
+      ctx.fillRect(ox + i * s, oz + j * s, s + 1, s + 1);
+
+      const o = v.objA[k];
+      if (o) drawObjectTop(ox + i * s, oz + j * s, s, o, v.objhA[k] / 10);
+    }
+  }
+
+  // At close zoom, show the metre grid. The scale is the point of the game.
+  if (s >= 14) {
+    ctx.strokeStyle = "rgba(0,0,0,.16)"; ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 0; i <= v.w; i++) {
+      const px = Math.round(ox + i * s) + .5;
+      ctx.moveTo(px, oz); ctx.lineTo(px, oz + v.h * s);
+    }
+    for (let j = 0; j <= v.h; j++) {
+      const py = Math.round(oz + j * s) + .5;
+      ctx.moveTo(ox, py); ctx.lineTo(ox + v.w * s, py);
+    }
+    ctx.stroke();
+  }
+
+  drawFieldsTop(ox, oz, s, v);
+  drawActorsTop(ox, oz, s, v);
+  if (S.sel) drawSelectionTop(ox, oz, s, v);
+}
+
+function drawObjectTop(px, py, s, code, h) {
+  const col = rgb(S.legend.objects[code].rgb);
+  const c = px + s / 2, m = py + s / 2;
+  ctx.fillStyle = col;
+  if (code === 1 || code === 6) {         // tree: size tracks real height
+    const r = Math.max(1.1, s * 0.30 * clamp(h / 18, 0.45, 1.5));
+    ctx.beginPath(); ctx.arc(c, m, r, 0, 6.284); ctx.fill();
+    if (code === 6 && s >= 8) {           // conifers get a darker heart
+      ctx.fillStyle = shade(S.legend.objects[6].rgb, 0.7);
+      ctx.beginPath(); ctx.arc(c, m, r * 0.45, 0, 6.284); ctx.fill();
+    }
+  } else if (code === 2) {                // shrub
+    const r = Math.max(0.7, s * 0.17);
+    ctx.beginPath(); ctx.arc(c, m, r, 0, 6.284); ctx.fill();
+  } else if (code === 5) {                // building
+    ctx.fillRect(px + 0.5, py + 0.5, s - 1, s - 1);
+  } else if (code === 4) {                // ore
+    ctx.fillRect(c - s * 0.22, m - s * 0.22, s * 0.44, s * 0.44);
+  } else {                                // boulder
+    ctx.beginPath(); ctx.arc(c, m, Math.max(1, s * 0.24), 0, 6.284); ctx.fill();
+  }
+}
+
+function drawFieldsTop(ox, oz, s, v) {
+  ctx.lineWidth = Math.max(1, s * 0.12);
+  for (const f of S.fields) {
+    ctx.strokeStyle = f.ripe ? "#e2c65a" : "rgba(180,200,120,.75)";
+    ctx.strokeRect((f.x - v.x0) * s + ox, (f.z - v.z0) * s + oz, f.w * s, f.h * s);
+    if (s >= 4 && f.crop) {
+      ctx.fillStyle = "rgba(226,198,90,.9)";
+      ctx.font = `${Math.max(9, s * 1.1)}px ui-monospace,monospace`;
+      ctx.fillText(`${f.crop} ${(f.progress*100)|0}%`,
+                   (f.x - v.x0) * s + ox + 3, (f.z - v.z0) * s + oz + s * 1.6);
+    }
+  }
+}
+
+function drawActorsTop(ox, oz, s, v) {
+  for (const a of S.actors) {
+    const px = (a.x - v.x0) * s + ox + s / 2;
+    const py = (a.z - v.z0) * s + oz + s / 2;
+    const r = Math.max(2.2, s * 0.42);
+    ctx.beginPath(); ctx.arc(px, py, r, 0, 6.284);
+    ctx.fillStyle = a.down ? "#c4553f" : (a.hurt ? "#d98b4a" : "#f2f4e6");
+    ctx.fill();
+    ctx.lineWidth = 1; ctx.strokeStyle = "#0b0d08"; ctx.stroke();
+    if (s >= 7) {
+      ctx.fillStyle = "#0b0d08";
+      ctx.font = `bold ${Math.max(8, s * 0.62)}px ui-monospace,monospace`;
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(a.initial, px, py + 0.5);
+      ctx.textAlign = "start"; ctx.textBaseline = "alphabetic";
+    }
+  }
+}
+
+function drawSelectionTop(ox, oz, s, v) {
+  ctx.strokeStyle = "#c9a227"; ctx.lineWidth = 2;
+  ctx.strokeRect((S.sel.x - v.x0) * s + ox, (S.sel.z - v.z0) * s + oz, s, s);
+}
+
+// --- cross-section: Y on the vertical -------------------------------------
+
+function drawSection() {
+  const v = S.view, s = S.scale;
+  const n = (S.plane === "xy") ? v.w : v.h;
+  const label = (S.plane === "xy") ? "X" : "Z";
+
+  // Vertical exaggeration: at 1:1 a 20 m tree on a 200 m transect is a hair.
+  const vex = 1.0;
+  const groundY = cv.height * 0.72;
+  const mPerPx = 1 / (s * vex);
+
+  // sky
+  const g = ctx.createLinearGradient(0, 0, 0, groundY);
+  g.addColorStop(0, "#1b2436"); g.addColorStop(1, "#33415a");
+  ctx.fillStyle = g; ctx.fillRect(0, 0, cv.width, groundY);
+
+  const camAxis = (S.plane === "xy") ? S.camX : S.camZ;
+  const ox = -camAxis * s;
+
+  // Height reference: mean of the transect, so the ground sits mid-screen.
+  let sum = 0;
+  for (let i = 0; i < n; i++) sum += v.yA[i];
+  const meanCm = sum / Math.max(1, n);
+
+  for (let i = 0; i < n; i++) {
+    const px = ox + i * s;
+    if (px + s < 0 || px > cv.width) continue;
+    const hCm = v.yA[i];
+    const top = groundY - (hCm - meanCm) / 100 * s * vex;
+
+    // Ground column: a soil horizon of the site's real depth, then bedrock.
+    // Fading the whole column to black instead made low ground look shadowed,
+    // because a shorter column compressed the same gradient.
+    const base = terrRGB(v.terrainA[i]);
+    const soilPx = Math.max(2, (v.soil_depth_cm / 100) * s * vex);
+    const grad = ctx.createLinearGradient(0, top, 0, top + soilPx);
+    grad.addColorStop(0, rgb(base));
+    grad.addColorStop(1, shade(base, 0.55));
+    ctx.fillStyle = grad;
+    ctx.fillRect(px, top, s + 1, soilPx);
+    ctx.fillStyle = shade([96, 92, 88], 0.62 + ((i * 37) % 7) * 0.012);
+    ctx.fillRect(px, top + soilPx, s + 1, cv.height - top - soilPx);
+
+    // water fills to its surface rather than standing up as a column
+    if (isWater(v.terrainA[i])) {
+      ctx.fillStyle = "rgba(70,130,180,.55)";
+      ctx.fillRect(px, top - s * 0.6, s + 1, s * 0.6);
+    }
+
+    // whatever stands on it, drawn to scale in metres
+    const code = v.objA[i], oh = v.objhA[i] / 10;
+    if (code && oh > 0) drawObjectSide(px, top, s, code, oh, vex);
+  }
+
+  // Everything past the site edge is not "empty", it is simply not generated.
+  const edge = ox + n * s;
+  if (edge < cv.width) {
+    ctx.fillStyle = "rgba(8,9,6,.72)";
+    ctx.fillRect(edge, 0, cv.width - edge, cv.height);
+    ctx.fillStyle = "rgba(216,220,200,.45)";
+    ctx.font = "11px ui-monospace,monospace";
+    ctx.fillText("edge of site", edge + 8, 18);
+  }
+  if (ox > 0) {
+    ctx.fillStyle = "rgba(8,9,6,.72)";
+    ctx.fillRect(0, 0, ox, cv.height);
+  }
+
+  drawActorsSide(ox, groundY, meanCm, s, vex, n);
+  drawAxis(groundY, meanCm, mPerPx, s, vex, label, ox, n);
+}
+
+function drawObjectSide(px, groundTop, s, code, h, vex) {
+  const col = S.legend.objects[code].rgb;
+  const hp = h * s * vex;                 // real metres -> pixels
+  const cx = px + s / 2;
+  if (code === 6) {                       // conifer: a spire
+    const tw = Math.max(1, s * 0.14);
+    ctx.fillStyle = "#3d2f1e";
+    ctx.fillRect(cx - tw / 2, groundTop - hp * 0.22, tw, hp * 0.22);
+    ctx.fillStyle = rgb(col);
+    const halfW = Math.max(2, s * 1.5);
+    ctx.beginPath();
+    ctx.moveTo(cx, groundTop - hp);
+    ctx.lineTo(cx + halfW, groundTop - hp * 0.12);
+    ctx.lineTo(cx - halfW, groundTop - hp * 0.12);
+    ctx.closePath(); ctx.fill();
+  } else if (code === 1) {                // broadleaf: trunk + round crown
+    const tw = Math.max(1, s * 0.16);
+    ctx.fillStyle = "#4a3a24";
+    ctx.fillRect(cx - tw / 2, groundTop - hp * 0.55, tw, hp * 0.55);
+    ctx.fillStyle = rgb(col);
+    ctx.beginPath();
+    ctx.ellipse(cx, groundTop - hp * 0.72, Math.max(2, s * 1.5),
+                Math.max(2.5, hp * 0.32), 0, 0, 6.284);
+    ctx.fill();
+  } else if (code === 2) {                // shrub
+    ctx.fillStyle = rgb(col);
+    ctx.beginPath();
+    ctx.ellipse(px + s / 2, groundTop - hp * 0.5, Math.max(1.2, s * 0.5),
+                Math.max(1.2, hp * 0.5), 0, 0, 6.284);
+    ctx.fill();
+  } else {                                // building, boulder, ore
+    ctx.fillStyle = rgb(col);
+    ctx.fillRect(px + s * 0.1, groundTop - hp, s * 0.8, hp);
+  }
+}
+
+function drawActorsSide(ox, groundY, meanCm, s, vex, n) {
+  const v = S.view;
+  for (const a of S.actors) {
+    const along = (S.plane === "xy") ? a.x : a.z;
+    const across = (S.plane === "xy") ? a.z : a.x;
+    if (across !== S.slice) continue;      // only people standing in the cut
+    const i = along - ((S.plane === "xy") ? v.x0 : v.z0);
+    if (i < 0 || i >= n) continue;
+    const top = groundY - (v.yA[i] - meanCm) / 100 * s * vex;
+    const hp = a.height_m * s * vex;
+    ctx.fillStyle = a.down ? "#c4553f" : "#f2f4e6";
+    ctx.fillRect(ox + along * s + s * 0.3, top - hp, Math.max(1.4, s * 0.4), hp);
+  }
+}
+
+function drawAxis(groundY, meanCm, mPerPx, s, vex, label, ox, n) {
+  ctx.strokeStyle = "rgba(216,220,200,.16)";
+  ctx.fillStyle = "rgba(216,220,200,.6)";
+  ctx.font = "11px ui-monospace,monospace";
+  ctx.lineWidth = 1;
+  // Height gridlines every 5 m of real elevation.
+  const stepM = 5;
+  for (let k = -6; k <= 10; k++) {
+    const y = groundY - k * stepM * s * vex;
+    if (y < 0 || y > cv.height) continue;
+    ctx.beginPath(); ctx.moveTo(0, y + .5); ctx.lineTo(cv.width, y + .5); ctx.stroke();
+    ctx.fillText(`${(meanCm/100 + k*stepM).toFixed(0)} m`, 6, y - 3);
+  }
+  ctx.fillStyle = "rgba(216,220,200,.75)";
+  ctx.fillText(`${label} axis  |  Y is up  |  1 tile = 1 m  |  ` +
+               `${S.view.soil_name}, ${(S.view.soil_depth_cm/100).toFixed(2)} m deep`,
+               6, cv.height - 26);
+}
+
+function drawScaleBar() {
+  const el = document.getElementById("scalebar");
+  // Choose a round number of metres that lands near 110 px.
+  const want = 110 / S.scale;
+  const nice = [1,2,5,10,20,50,100,200,500].reduce(
+    (a,b) => Math.abs(b-want) < Math.abs(a-want) ? b : a);
+  el.innerHTML = `${nice} m<i style="width:${nice*S.scale}px"></i>`;
+}
+
+// ---------------------------------------------------------------------------
+// panels
+// ---------------------------------------------------------------------------
+
+function bar(v, good) {
+  const p = clamp(v, 0, 1);
+  const col = p < .25 ? "var(--bad)" : (p < .5 ? "var(--hot)" : "var(--good)");
+  return `<div class="bar"><i style="width:${(p*100).toFixed(0)}%;background:${col}"></i></div>`;
+}
+const row = (k, v) => `<div class="row"><span class="dim">${k}</span><span>${v}</span></div>`;
+
+function paintPanels() {
+  const st = S.status; if (!st) return;
+  document.getElementById("clock").textContent = st.clock.text;
+  const w = st.weather;
+  document.getElementById("wx").textContent =
+    `${w.temp_c > 0 ? "+" : ""}${w.temp_c} C` +
+    (w.raining ? " rain" : w.snowing ? " snow" : "") +
+    `  in ${w.indoor_c > 0 ? "+" : ""}${w.indoor_c} C`;
+
+  const s = st.site;
+  document.getElementById("site").innerHTML =
+    row("position", `${Math.abs(s.lat).toFixed(3)}${s.lat>=0?"N":"S"} ${Math.abs(s.lon).toFixed(3)}${s.lon>=0?"E":"W"}`) +
+    row("biome", s.biome) + row("climate", s.koppen) + row("soil", s.soil) +
+    row("site", `${s.size_m} x ${s.size_m} m at 1 m`) +
+    `<div class="dim" style="font-size:10.5px;margin-top:4px">Earth has ${s.earth_tiles} m&sup2;. This is ${(s.size_m*s.size_m).toLocaleString()} of them.</div>`;
+
+  const c = st.colony;
+  document.getElementById("colony").innerHTML =
+    row("alive", `${c.population}${c.dead ? `  (${c.dead} lost)` : ""}`) +
+    `<span class="dim">food ${c.food_days} days</span>${bar(c.food_days/200)}` +
+    `<span class="dim">fuel ${c.fuel_days} days</span>${bar(c.fuel_days/120)}` +
+    `<span class="dim">water ${c.water_days} days</span>${bar(c.water_days/5)}` +
+    `<span class="dim">morale ${(c.morale*100)|0}%</span>${bar(c.morale)}` +
+    row("beds", `${c.beds} / ${c.population}`) +
+    `<div class="dim" style="margin-top:6px">${c.stores}</div>`;
+
+  document.getElementById("standings").innerHTML = st.standings.map(f =>
+    `<tr class="${f.player?"me":""}"><td>${f.glyph}</td><td>${f.name}</td>` +
+    `<td class="dim">${f.doctrine}</td><td>${f.settlements}</td>` +
+    `<td>${f.population}</td>` +
+    `<td class="dim">${f.relation===null?"":f.relation>0?"+"+f.relation:f.relation}</td></tr>`).join("");
+
+  document.getElementById("intel").innerHTML =
+    st.intel.length ? st.intel.map(t => `<div>${esc(t)}</div>`).join("")
+                    : `<div class="dim">nothing intercepted yet</div>`;
+  document.getElementById("log").innerHTML =
+    st.log.slice().reverse().map(t => `<div>${esc(t)}</div>`).join("");
+
+  if (st.over) {
+    document.getElementById("over").style.display = "grid";
+    document.getElementById("overtext").textContent = st.outcome;
+  }
+}
+
+const esc = t => t.replace(/[&<>]/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[ch]));
+
+async function inspect(x, z) {
+  S.sel = { x, z };
+  const t = await api(`/api/tile?x=${x}&z=${z}`);
+  document.getElementById("tileh").hidden = false;
+  document.getElementById("tile").innerHTML =
+    row("X / Z", `${t.x}, ${t.z}`) +
+    row("Y (elevation)", `${t.elevation_m} m`) +
+    row("lat / lon", `${t.lat}, ${t.lon}`) +
+    row("terrain", t.terrain) +
+    (t.object ? row("on it", t.object) : "") +
+    row("fertility", t.fertility) +
+    row("walk", `${t.walk_s} s/m`) + row("cover", t.cover);
+  draw();
+}
+
+// ---------------------------------------------------------------------------
+// input
+// ---------------------------------------------------------------------------
+
+function setPlane(p) {
+  S.plane = p;
+  for (const b of document.querySelectorAll("#planes button"))
+    b.setAttribute("aria-pressed", String(b.dataset.plane === p));
+  const el = document.getElementById("slice");
+  el.hidden = (p === "xz");
+  el.textContent = `slice ${p === "xy" ? "Z" : "X"} = ${S.slice} m   [ ]`;
+  refresh();
+}
+
+function screenToTile(ev) {
+  const r = cv.getBoundingClientRect();
+  const dpr = cv.width / r.width;
+  const px = (ev.clientX - r.left) * dpr, py = (ev.clientY - r.top) * dpr;
+  return { x: Math.floor(S.camX + px / S.scale), z: Math.floor(S.camZ + py / S.scale) };
+}
+
+cv.addEventListener("click", ev => {
+  if (S.plane !== "xz") return;
+  const t = screenToTile(ev);
+  const size = S.status ? S.status.site.size_m : 160;
+  if (t.x >= 0 && t.z >= 0 && t.x < size && t.z < size) inspect(t.x, t.z);
+});
+
+let drag = null;
+cv.addEventListener("pointerdown", e => { drag = { x:e.clientX, y:e.clientY, cx:S.camX, cz:S.camZ, moved:0 }; cv.setPointerCapture(e.pointerId); });
+cv.addEventListener("pointermove", e => {
+  if (!drag) return;
+  const r = cv.getBoundingClientRect(), dpr = cv.width / r.width;
+  const dx = (e.clientX - drag.x) * dpr / S.scale, dy = (e.clientY - drag.y) * dpr / S.scale;
+  drag.moved += Math.abs(dx) + Math.abs(dy);
+  S.camX = drag.cx - dx; S.camZ = drag.cz - dy;
+  clampCam(); draw();
+});
+cv.addEventListener("pointerup", () => { if (drag && drag.moved > 0.5) refresh(); drag = null; });
+
+cv.addEventListener("wheel", e => {
+  e.preventDefault();
+  zoom(e.deltaY < 0 ? 1.25 : 0.8);
+}, { passive:false });
+
+function zoom(f) {
+  S.scale = clamp(S.scale * f, 1.5, 40);
+  clampCam(); refresh();
+}
+function clampCam() {
+  const size = S.status ? S.status.site.size_m : 160;
+  const vw = cv.width / S.scale, vh = cv.height / S.scale;
+  S.camX = clamp(S.camX, -2, Math.max(0, size - vw) + 2);
+  S.camZ = clamp(S.camZ, -2, Math.max(0, size - vh) + 2);
+}
+
+addEventListener("keydown", e => {
+  const k = e.key.toLowerCase();
+  const pan = Math.max(2, 24 / S.scale);
+  if (k === "tab") {
+    e.preventDefault();
+    const order = S.legend.planes.map(p => p.id);
+    setPlane(order[(order.indexOf(S.plane) + 1) % order.length]);
+  }
+  else if (k === "a" || k === "arrowleft")  { S.camX -= pan; clampCam(); refresh(); }
+  else if (k === "d" || k === "arrowright") { S.camX += pan; clampCam(); refresh(); }
+  else if (k === "w" || k === "arrowup")    { S.camZ -= pan; clampCam(); refresh(); }
+  else if (k === "s" || k === "arrowdown")  { S.camZ += pan; clampCam(); refresh(); }
+  else if (k === "+" || k === "=")          zoom(1.25);
+  else if (k === "-" || k === "_")          zoom(0.8);
+  else if (k === "[") { S.slice = Math.max(0, S.slice - 1); setPlane(S.plane); }
+  else if (k === "]") { S.slice = S.slice + 1; setPlane(S.plane); }
+});
+
+async function advance(minutes) {
+  if (S.busy) return;
+  S.busy = true;
+  for (const b of ["step","day","week"]) document.getElementById(b).disabled = true;
+  try {
+    await api("/api/advance", {
+      method:"POST", headers:{"content-type":"application/json"},
+      body: JSON.stringify({ minutes }),
+    });
+    await loadStatus();
+    await refresh();
+  } finally {
+    S.busy = false;
+    for (const b of ["step","day","week"]) document.getElementById(b).disabled = false;
+  }
+}
+document.getElementById("step").onclick = () => advance(60);
+document.getElementById("day").onclick  = () => advance(1440);
+document.getElementById("week").onclick = () => advance(1440 * 7);
+
+async function refresh() { await loadView(); draw(); }
+
+addEventListener("resize", () => { resize(); clampCam(); refresh(); });
+
+(async function start() {
+  resize();
+  await loadLegend();
+  await loadStatus();
+  const size = S.status.site.size_m;
+  S.slice = Math.floor(size / 2);
+  // Open centred on the settlement.
+  S.camX = size/2 - cv.width / S.scale / 2;
+  S.camZ = size/2 - cv.height / S.scale / 2;
+  clampCam();
+  setPlane("xz");
+  window.__pegReady = true;
+})();
+</script>

@@ -35,3 +35,6 @@ include = ["peg*"]
 # installs cleanly and then cannot find the planet.
 [tool.setuptools.package-data]
 "peg.world" = ["earth.json.gz"]
+# The GUI page is data too: it is read through importlib.resources so that it
+# survives being installed as a wheel or bundled into a zipapp.
+"peg.ui.web" = ["index.html"]

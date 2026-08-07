@@ -5,6 +5,7 @@
     python3 -m peg site    <lon> <lat>     draw one hectare of it at 1 m
     python3 -m peg observe                 watch the Stewards compete, headless
     python3 -m peg play                    run a colony
+    python3 -m peg gui                     the graphical client, in a browser
     python3 -m peg fight                   run a firefight
 """
 
@@ -208,6 +209,25 @@ def cmd_play(args) -> int:
 
 
 # --------------------------------------------------------------------------
+# gui
+# --------------------------------------------------------------------------
+
+
+def cmd_gui(args) -> int:
+    """The graphical client: top-down X/Z, with a switch to the Y views."""
+    from .game import Game
+    from .ui import server
+    print("  building the world ...", flush=True)
+    g = Game.new(seed=args.seed, lon=args.lon, lat=args.lat,
+                 rivals=args.rivals, size=args.size)
+    print(f"  {g.colony.survey.biome.name} at "
+          f"{render.compass_note(g.colony.survey.lat, g.colony.survey.lon)}")
+    server.serve(g, host=args.host, port=args.port,
+                 open_browser=not args.no_browser)
+    return 0
+
+
+# --------------------------------------------------------------------------
 # fight
 # --------------------------------------------------------------------------
 
@@ -303,6 +323,17 @@ def build_parser() -> argparse.ArgumentParser:
                    help="run headless for N days instead of interactively")
     s.set_defaults(func=cmd_play)
 
+    s = sub.add_parser("gui", help="the graphical client, in your browser")
+    s.add_argument("--lon", type=float, default=None)
+    s.add_argument("--lat", type=float, default=None)
+    s.add_argument("--rivals", type=int, default=5)
+    s.add_argument("--size", type=int, default=160)
+    s.add_argument("--port", type=int, default=8770)
+    s.add_argument("--host", default="127.0.0.1")
+    s.add_argument("--no-browser", action="store_true", dest="no_browser",
+                   help="do not open a browser window automatically")
+    s.set_defaults(func=cmd_gui)
+
     s = sub.add_parser("fight", help="resolve one firefight")
     s.add_argument("--lon", type=float, default=-4.5)
     s.add_argument("--lat", type=float, default=57.0)
@@ -354,12 +385,13 @@ def _pick_place(pal: render.Palette) -> tuple[float, float]:
 
 
 MENU = """
-  1) Play           run a colony, with rivals competing on the same continent
-  2) Watch          let the AI Stewards fight it out, no player
-  3) Survey a place what the ground, climate and soil are really like
-  4) See the world  draw the planet
-  5) See a site     one hectare of it, at one metre per tile
-  6) A firefight    resolve a single engagement
+  1) Play (graphical)  opens in your browser: top-down, with an elevation view
+  2) Play (terminal)   the same game, text only
+  3) Watch             let the AI Stewards fight it out, no player
+  4) Survey a place    what the ground, climate and soil are really like
+  5) See the world     draw the planet
+  6) See a site        one hectare of it, at one metre per tile
+  7) A firefight       resolve a single engagement
   q) Quit
 """
 
@@ -381,19 +413,22 @@ def menu(argv_seed: int, no_colour: bool) -> int:
         return 0
     if choice == "1":
         lon, lat = _pick_place(pal)
-        argv += ["play", "--lon", str(lon), "--lat", str(lat)]
+        argv += ["gui", "--lon", str(lon), "--lat", str(lat)]
     elif choice == "2":
+        lon, lat = _pick_place(pal)
+        argv += ["play", "--lon", str(lon), "--lat", str(lat)]
+    elif choice == "3":
         years = _ask("  how many years? [25] ", "25")
         argv += ["observe", "--years", years]
-    elif choice == "3":
+    elif choice == "4":
         lon, lat = _pick_place(pal)
         argv += ["survey", str(lon), str(lat)]
-    elif choice == "4":
-        argv += ["map"]
     elif choice == "5":
+        argv += ["map"]
+    elif choice == "6":
         lon, lat = _pick_place(pal)
         argv += ["site", str(lon), str(lat)]
-    elif choice == "6":
+    elif choice == "7":
         argv += ["fight"]
     else:
         print("  didn't understand that, sorry.")
