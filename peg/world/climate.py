@@ -255,6 +255,40 @@ def _zonal_precip(lat: float) -> float:
     return (equatorial + midlat + 300.0) * subsidence * polar_dry
 
 
+def _warm_sea_supply(r: raster.WorldRaster, lon: float, lat: float,
+                     hemi: float) -> float:
+    """Moisture reaching an inland site from a warm sea on its equatorward
+    side, 0-1.
+
+    The Great Plains low-level jet is the archetype: the Gulf of Mexico feeds
+    the whole North American interior in summer, which is why Iowa gets
+    900 mm a year while Ulaanbaatar, no further from the sea, gets 270. The
+    difference is not distance, it is that Mongolia's equatorward fetch is
+    blocked by 2000 km of Asia.
+
+    So the probe walks towards the equator looking for open water, and gives
+    up if it has to cross a mountain barrier to get there -- which correctly
+    denies central Asia the Arabian Sea on the far side of the Hindu Kush.
+    """
+    coslat = max(0.1, math.cos(math.radians(lat)))
+    barrier = 0.0
+    for d_km in (300.0, 600.0, 900.0, 1300.0, 1700.0):
+        la2 = geo.clamp_lat(lat - hemi * d_km / 110.574)
+        found = False
+        for dl in (-7.0, -3.5, 0.0, 3.5, 7.0):
+            lo2 = geo.wrap_lon(lon + dl / coslat)
+            if not r.is_land(lo2, la2):
+                found = True
+            else:
+                barrier = max(barrier, r.elevation(lo2, la2))
+        if found:
+            # Fetch is spent both by distance and by anything it climbed over.
+            reach = math.exp(-d_km / 1400.0)
+            block = math.exp(-max(0.0, barrier - 700.0) / 700.0)
+            return reach * block
+    return 0.0
+
+
 def _moisture_supply(lat: float, coast_km: float) -> float:
     """Fraction of maritime moisture that survives to this distance inland.
 
@@ -433,7 +467,10 @@ def settlement_elevation(r: raster.WorldRaster, lon: float, lat: float) -> float
     places that matter and the right input for climate, which is measured at
     inhabited altitudes.
     """
-    return max(0.0, r.elevation(lon, lat) - 0.40 * r.local_relief(lon, lat))
+    cell = r.elevation(lon, lat)
+    # Never drop below a quarter of the cell mean: the Scottish Highlands are
+    # rugged, but their glens are still at 200 m, not at sea level.
+    return max(0.0, max(cell * 0.25, cell - 0.40 * r.local_relief(lon, lat)))
 
 
 def _compute(r: raster.WorldRaster, lon: float, lat: float,
@@ -461,7 +498,11 @@ def _compute(r: raster.WorldRaster, lon: float, lat: float,
     ann_zonal = _zonal_precip(lat)
 
     supply = _moisture_supply(lat, coast_km)
+    supply = max(supply, supply + 0.75 * _warm_sea_supply(r, lon, lat, hemi)
+                 * (1.0 - supply))
 
+    # Seasonal weights. These need the monthly temperatures computed above,
+    # because summer convection scales with how hot the ground gets.
     # Seasonal weights first. These say *when* it rains; they are normalised
     # to a mean of one so that redistributing the year does not also invent or
     # destroy rainfall. Terms that genuinely change the annual total -- relief
@@ -487,7 +528,17 @@ def _compute(r: raster.WorldRaster, lon: float, lat: float,
         high_lat = 30.0 + 6.0 * season
         subs = 1.0 - 0.55 * math.exp(-(((abs(lat) - high_lat) / 8.0) ** 2))
 
-        shares.append((0.12 + 1.6 * conv + 1.30 * storm) * subs)
+        # Summer convection: a heated continental surface builds thunderstorms
+        # in the afternoon. This is the dominant warm-season rainfall mechanism
+        # over continental interiors, and without it the American Midwest comes
+        # out with a Mediterranean rainfall regime.  Gated hard on
+        # continentality, because a coastal site has a stable marine layer
+        # instead -- which is exactly why Los Angeles stays dry in July while
+        # Iowa, at a similar latitude, does not.
+        warmth = rng.clamp01((temps[m] - 8.0) / 20.0)
+        convective = warmth * (continentality ** 1.5)
+
+        shares.append((0.12 + 1.6 * conv + 1.0 * storm + 2.2 * convective) * subs)
     mean_share = sum(shares) / 12.0
     if mean_share > 0:
         shares = [s / mean_share for s in shares]
