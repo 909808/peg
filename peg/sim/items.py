@@ -67,12 +67,23 @@ ITEMS: dict[str, ItemDef] = {d.key: d for d in (
     _d("fat", "rendered fat", 1.0, kcal_kg=8800, shelf_days=400, fuel_mj_kg=37,
        value=3.0, tags=("food", "raw")),
     # ---- prepared -------------------------------------------------------
-    _d("meal", "cooked meal", 0.6, kcal_kg=2400, protein_g_kg=130,
+    # These weigh a kilogram per unit like everything else. They used to be
+    # 0.6 and 0.5, which quietly broke the books: stack amounts are in units
+    # but nutrition is per kilogram, so half-kilo rations were counted at
+    # their full per-kilogram calorie value and every batch of them minted
+    # food out of nothing.
+    _d("meal", "cooked meal", 1.0, kcal_kg=2400, protein_g_kg=130,
        vit_c_mg_kg=120, shelf_days=2, value=3.0, tags=("food", "cooked")),
-    _d("preserved", "preserved ration", 0.5, kcal_kg=3000, protein_g_kg=150,
+    _d("preserved", "preserved ration", 1.0, kcal_kg=3000, protein_g_kg=150,
        shelf_days=600, value=4.0, tags=("food", "cooked")),
     # ---- construction and industry --------------------------------------
     _d("wood", "wood", 1.0, fuel_mj_kg=16, value=0.4, tags=("build", "fuel")),
+    # Twisted prairie hay. Dry grass is about 16 MJ/kg, but it is bulky, burns
+    # fast and never dries fully, so call it 14.5. This is not a curiosity: on
+    # the tallgrass prairie there is no timber for hundreds of kilometres, and
+    # settlers heated sod houses by twisting hay into hard "cats" for hours a
+    # day. Without it the best farmland on the planet is a death sentence.
+    _d("hay", "twisted hay", 1.0, fuel_mj_kg=14.5, value=0.1, tags=("fuel",)),
     _d("plank", "planks", 1.0, fuel_mj_kg=16, value=1.0, tags=("build", "fuel")),
     _d("stone", "stone block", 1.0, value=0.5, tags=("build",)),
     _d("clay", "clay", 1.0, value=0.3, tags=("build",)),
@@ -234,7 +245,11 @@ class Store:
             if score > best_score:
                 best_score = score
                 best = st.key
-        return best if best_score > 40.0 else None
+        # Any real source beats none. An absolute threshold of 40 meant that
+        # once stored potatoes had aged past about two months they stopped
+        # counting at all, and a colony sitting on two tonnes of them died of
+        # scurvy rather than eat a slightly weaker antiscorbutic.
+        return best if best_score > 8.0 else None
 
     def tick_spoilage(self, minutes: float, temp_c: float) -> dict[str, float]:
         """Age perishables. Returns what was lost, by item.
@@ -394,19 +409,32 @@ class Recipe:
 
 
 RECIPES: dict[str, Recipe] = {r.key: r for r in (
-    Recipe("cook_meal", "cook a meal", (("grain", 0.35), ("vegetables", 0.25)),
-           (("meal", 1.0),), 12, "cooking", "kitchen", heat_mj=2.5),
-    Recipe("cook_meat", "cook a meat meal", (("meat", 0.35), ("vegetables", 0.2)),
-           (("meal", 1.0),), 12, "cooking", "kitchen", heat_mj=2.5),
-    Recipe("preserve", "salt and dry rations", (("meat", 0.6), ("salt", 0.05)),
-           (("preserved", 1.0),), 25, "cooking", "kitchen"),
+    # Every food recipe below conserves calories. Cooking earns a modest
+    # uplift because gelatinised starch and denatured protein really are more
+    # digestible than the raw ingredients; drying is a small net loss. The
+    # first versions of these turned 1,260 kcal of grain into 2,400 kcal of
+    # dinner and 1,140 kcal of cabbage into a 3,000 kcal ration, which is a
+    # perpetual motion machine with a kitchen attached.
+    Recipe("cook_meal", "cook a meal", (("grain", 0.55), ("vegetables", 0.80)),
+           (("meal", 1.0),), 14, "cooking", "kitchen", heat_mj=2.5),
+    Recipe("cook_meat", "cook a meat meal", (("meat", 0.95), ("vegetables", 0.90)),
+           (("meal", 1.0),), 14, "cooking", "kitchen", heat_mj=2.5),
+    Recipe("preserve", "salt and dry rations", (("meat", 1.75), ("salt", 0.05)),
+           (("preserved", 1.0),), 28, "cooking", "kitchen"),
     # Drying is what turns an autumn glut into something that survives to
     # spring. It costs most of the vitamin C, which is precisely why a colony
-    # living on dried stores through a long winter gets scurvy anyway.
-    Recipe("dry_produce", "dry produce", (("vegetables", 3.4),),
-           (("preserved", 1.0),), 22, "cooking", "kitchen"),
-    Recipe("dry_berries", "dry berries", (("berries", 2.2),),
-           (("preserved", 1.0),), 18, "cooking", "kitchen"),
+    # living on dried stores through a long winter gets scurvy anyway. It also
+    # takes a great deal of fresh produce, because vegetables are mostly water.
+    Recipe("dry_produce", "dry produce", (("vegetables", 11.8),),
+           (("preserved", 1.0),), 30, "cooking", "kitchen"),
+    Recipe("dry_berries", "dry berries", (("berries", 6.4),),
+           (("preserved", 1.0),), 24, "cooking", "kitchen"),
+    # Roots are the staple a colony actually grows, and until this existed
+    # there was no way to carry a potato harvest through to spring: two
+    # tonnes came in every August and composted by Christmas. Drying them is
+    # real practice -- Andean chuno is exactly this.
+    Recipe("dry_potato", "dry roots", (("potato", 4.3),),
+           (("preserved", 1.0),), 26, "cooking", "kitchen"),
     Recipe("saw_planks", "saw planks", (("wood", 1.4),), (("plank", 1.0),),
            9, "crafting", "sawpit"),
     Recipe("burn_charcoal", "burn charcoal", (("wood", 5.0),),

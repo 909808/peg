@@ -133,6 +133,60 @@ the same shape: a planner that was locally sensible and globally suicidal.
    would do is move grain from the settlement that has it to the one that does
    not. Without it, daughter colonies starved within sight of a full granary.
 
+### What went wrong in the colony, in order
+
+The same shape of failure as the AI, one level down: rules that were locally
+reasonable and collectively fatal. Each of these was found by tracing a single
+settlement day by day for two years and asking why a number was what it was.
+
+1. **Eating pre-empted work, and could be retried every tick.** A hungry
+   colonist ate and their tick ended. With the larder nearly empty everyone's
+   calorie debt sits permanently above the threshold, so the whole settlement
+   spent every waking minute eating the few grams the foragers brought in, and
+   nobody farmed, cut fuel or cooked their way out of it. Six people starved
+   with the workforce fully employed. Meals now cost 25 minutes out of the tick
+   and people eat about four times a day, like people.
+2. **The kitchen minted calories.** Cooking turned 1,260 kcal of grain and
+   cabbage into a 2,400 kcal dinner; drying turned 1,140 kcal of vegetables
+   into a 3,000 kcal ration. Rations and meals also weighed half a kilogram
+   each while their nutrition was counted per kilogram, so every batch was
+   worth double on the books. In a game whose entire claim is that the
+   arithmetic is real, the kitchen was a perpetual motion machine. A test now
+   asserts that no food recipe returns more energy than it consumes.
+3. **The main crop could not be kept.** Potatoes keep 120 days and come in in
+   August. Nothing preserved them — no recipe took them — and the cook's
+   "about to spoil, drop everything" rule only looked at food with a shelf life
+   under 60 days, which excluded them by construction. Two tonnes a year went
+   to compost while the cook stood next to it deciding nothing was urgent.
+4. **Treeless ground had no fuel at all.** Fuel work was gated on the survey's
+   standing timber, so on the tallgrass prairie — the best farmland on Earth,
+   and genuinely treeless — the job returned zero urgency forever. The colony
+   burned the woodpile it arrived with and then froze. Prairie settlers twisted
+   hay; so does this one, at 3.5 person-minutes per kilogram against 0.055 for
+   felling timber. That ratio is the point: it is why a woodland site is worth
+   something.
+5. **Fuel was judged against today's weather.** "Days of fuel left" divides by
+   the current heating bill, which in July is nearly zero, so a colony in
+   midsummer concludes it has centuries of firewood and does no fuel work at
+   all — then freezes in January. Cutting fuel is a *summer* job. The target is
+   now the heating required to reach the far side of the next cold season,
+   computed from the site's own climate.
+6. **Drought damage was permanent.** A field's water deficit was never reset,
+   and only ever accumulated while something was in the ground, so it was
+   inherited by every subsequent crop. Every field on every map decayed
+   monotonically towards the yield floor: a colony's tenth harvest was a
+   fraction of its first however much it rained, and nothing could bring the
+   land back. A season's water balance belongs to that season's crop.
+7. **Jobs had no saturation.** A large perishable harvest put every single
+   person in the kitchen permanently and nothing else got done. Work types that
+   only absorb a couple of hands now say so.
+
+What is left is emergent rather than broken, and worth keeping. A colony that
+sows its whole field with a fast autumn catch crop harvests twenty tonnes of
+turnips and watches eighteen of them rot in a fortnight, because three people
+cannot dry twenty tonnes of roots in two weeks. That is a real lesson about
+planting what you can process, and the log says so plainly.
+
 ## Combat: geometry over percentages
 
 Hit probability is the shooter's total dispersion — mechanical MOA plus a human
@@ -186,6 +240,33 @@ which is the entire reason they exist. It also makes the payload
 self-validating: a slice across a 620 stems/hectare conifer forest shows about
 thirteen trees per 160 m, which is what that density means.
 
+### Why the first client was unusable
+
+It was, in the player's words, the laggiest and clunkiest thing they had seen,
+and they could not tell what they were playing or where they were. Both halves
+of that were fair, and they had different causes.
+
+The lag was two mistakes. Every pan and every zoom fetched a fresh viewport
+over HTTP, so the camera moved at the speed of a round trip; and every frame
+issued about three thousand individual `arc()` calls, one per object. The fix
+was to stop treating the network as part of the render loop — the whole site
+arrives once as packed bytes, 184 KiB for 160 m — and to stop treating the
+canvas as a scene graph. Terrain, hillshade and object tint are baked once into
+an offscreen `ImageData` at one pixel per tile and blitted with a single scaled
+`drawImage`; objects are drawn above a zoom threshold as one batched path per
+class. Frame cost went from 9.62 ms to 0.5–1.1 ms, and panning and zooming now
+make zero network requests.
+
+Not knowing where you were was the more interesting complaint, because nothing
+was broken — the information genuinely was not there. A grid of coloured
+squares is not a place. What fixed it was naming things: the nearest real
+landmark and its distance, a world map with your dot on it, an ordered list of
+what the colony needs next in plain language, a key that finds your people, and
+colonists who walk to their work so the map shows the settlement doing
+something. None of that changed a single number in the simulation. All of it
+changed whether the simulation was legible, which is the only thing that
+matters about an interface.
+
 ## Things deliberately left out
 
 - **Real-time play.** The interesting decisions are ones you want to think
@@ -198,9 +279,15 @@ thirteen trees per 160 m, which is what that density means.
 - **Tech trees with fictional tiers.** Research is five branches of real
   capability (agriculture, metallurgy, medicine, firearms, logistics) that
   modify real coefficients.
-- **Animals, in any depth.** Hunting is folded into foraging. This is the
-  largest genuine gap; livestock in particular would change the food model
-  substantially and is where I would go next.
+- **Animals, in any depth.** Hunting is folded into foraging.
 - **Individual pawn pathing for colony work.** Work is allocated by urgency with
-  travel time approximated from distance. A* exists and is used for combat,
-  where the metre-by-metre positions actually matter.
+  travel time approximated from distance. Colonists do walk to their work — they
+  pick the nearest site for the job, steer towards it and stay a while — but
+  that is presentational, and deliberately so: the economy is costed in
+  person-minutes either way. A* exists and is used for combat, where the
+  metre-by-metre positions actually decide the outcome.
+- **Livestock.** The largest genuine gap, and where I would go next. It is also
+  now a slightly embarrassing one: the prairie fuel problem has a well-known
+  historical answer this model cannot express, which is that you burn dung.
+  Animals would change the food model, the fuel model and the soil fertility
+  model at once, which is why they are a project rather than an afternoon.

@@ -158,6 +158,11 @@ class Species:
     #: Which biomes it grows in.
     biomes: tuple[str, ...]
     hardwood: bool = False
+    #: Dry burnable biomass in a mature specimen, kg, for plants that carry no
+    #: usable timber. A square metre of tallgrass prairie yields roughly half a
+    #: kilogram of dry matter, and on a treeless site that is the only fuel
+    #: there is.
+    hay_kg: float = 0.0
 
 
 FLORA: tuple[Species, ...] = (
@@ -184,8 +189,10 @@ FLORA: tuple[Species, ...] = (
     Species("dwarf_birch", "dwarf birch", "\"", 1, 20, 0, 8, ("tundra", "alpine")),
     Species("saxaul", "saxaul", "\"", 3, 90, 0, 15, ("desert", "semidesert", "steppe")),
     Species("bunchgrass", "bunchgrass", "\"", 1, 0, 260, 1,
-            ("grassland", "steppe", "savanna", "tundra", "semidesert", "shrubland")),
-    Species("reed", "reed", "\"", 3, 8, 300, 2, ("wetland", "mangrove")),
+            ("grassland", "steppe", "savanna", "tundra", "semidesert", "shrubland"),
+            hay_kg=0.6),
+    Species("reed", "reed", "\"", 3, 8, 300, 2, ("wetland", "mangrove"),
+            hay_kg=1.4),
     Species("berry_bush", "berry bush", "\"", 2, 15, 3400, 4,
             ("temp_broadleaf", "temp_conifer", "boreal", "tundra", "temp_rain")),
 )
@@ -226,6 +233,10 @@ class Plant:
     @property
     def wood_kg(self) -> float:
         return self.species.wood_kg * (self.growth ** 2.2)
+
+    @property
+    def hay_kg(self) -> float:
+        return self.species.hay_kg * self.growth
 
     @property
     def blocks_sight(self) -> bool:

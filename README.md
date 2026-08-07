@@ -95,6 +95,24 @@ version.
 `peg gui` opens a graphical client in your browser. No install, no toolkit —
 PEG runs a small local server and the browser is the window.
 
+**You should always know where you are and what you are doing.** The title bar
+names the biome you are standing in, your latitude and longitude, and the
+nearest real place — *"57.000°N 4.500°W · Cfb · near Ben Nevis (1343 m) 38 km
+away"*. A world map in the corner shows the same thing at planetary scale, with
+your site as a gold dot and every rival network beside it. A **what to do next**
+panel keeps a short, ordered list of what the colony actually needs — *"2 beds
+for 8 people. Sleeping out costs calories and morale."* — and **Find my people**
+snaps the camera to wherever your colonists have wandered off to. A one-screen
+briefing explains the premise the first time you open the page.
+
+**It runs at sixty frames a second.** The whole site is fetched once as packed
+bytes and baked to an offscreen canvas at one pixel per tile; panning and
+zooming redraw locally and make **no network requests at all**. A frame costs
+0.5–1.1 ms against a 16.7 ms budget, and the page is interactive in about a
+second. An earlier version fetched a viewport on every keystroke and rendered
+three thousand individual `arc()` calls per frame, which is exactly as bad as it
+sounds.
+
 **Axes are X / Z / Y.** X is east, Z is north, **Y is up**. The default view is
 the **X/Z plane**, top-down, looking at the ground. The switch at the top left
 (or <kbd>Tab</kbd>) changes the coordinate plane to one of two elevation views:
@@ -126,6 +144,12 @@ Controls: <kbd>WASD</kbd> or arrows to pan, <kbd>+</kbd>/<kbd>−</kbd> or the
 wheel to zoom, drag to pan, <kbd>Tab</kbd> to switch plane, click to inspect.
 The metre grid appears once you are zoomed in far enough for it to mean
 something.
+
+Colonists walk to their work and stand where they are working, so the top-down
+view reads as a settlement rather than a pile of tokens: you can see who is out
+in the field, who is at the woodpile and who is inside. Labels appear on hover
+rather than permanently, because eight names stacked on one cabin is not
+information.
 
 There is still a full terminal client (`peg play`) — it is genuinely useful
 over SSH, and it is what the headless `peg observe` mode is built on.
@@ -178,6 +202,14 @@ three months. Each runs on its own clock, and a colony can be comfortably
 winning on four of them while losing on the fifth. A larder full of grain and
 dried meat is a scurvy death; the answer is potatoes and a cold store, which is
 the answer people actually found.
+
+So are the problems. Two tonnes of potatoes come in every August and keep for
+four months, so the question is not whether you can grow food but whether you
+can still eat it in March — dried into rations, or held in a cold store, or
+composted. And Iowa, the best cropland on the planet, has no trees on it: a
+prairie colony heats itself by cutting and twisting hay at sixty times the
+labour per kilogram of felling timber, which is what actually happened to the
+people who settled it.
 
 **Combat is geometry, not percentages.** A weapon has a bullet mass, a muzzle
 velocity, a ballistic coefficient and a dispersion in MOA. Your shooter's own
@@ -271,7 +303,7 @@ run.sh, run.bat       double-click launchers
 ```
 
 ```bash
-python3 -m unittest discover -s tests -t .    # 104 tests
+python3 -m unittest discover -s tests -t .    # 110 tests
 python3 tools/build.py                        # single-file build
 python3 tools/bake_earth.py                   # refresh Earth data (needs network)
 ```

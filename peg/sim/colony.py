@@ -28,6 +28,20 @@ from .pawn import Pawn
 
 MINUTES_PER_DAY = 1440
 
+#: How long sitting down to a meal takes, and how long until the next one.
+#: Four meals a day at a stomach's worth each is well over what anyone needs,
+#: so this never starves a colony that has food -- it only stops a colony that
+#: has none from spending every minute of daylight trying to eat.
+MEAL_MINUTES = 25.0
+MEAL_INTERVAL_MIN = 200.0
+
+#: Shelf life below which food counts as "must be preserved or lost". The
+#: threshold used to be 60 days, which sounds reasonable and excluded exactly
+#: the crop that matters: potatoes keep for 120 days, are what a temperate
+#: colony grows most of, and rotted by the tonne every winter while the cook
+#: stood next to them deciding nothing was urgent.
+PERISHABLE_DAYS = 200.0
+
 
 # --------------------------------------------------------------------------
 # buildings
@@ -313,6 +327,13 @@ class Colony:
     #: Wild food currently standing within foraging range, in kilocalories.
     forage_stock_kcal: float = -1.0
 
+    #: Day-cached answer to "is there grass to cut", see :meth:`_has_hay`.
+    _hay_day: int = -1
+    _hay_ok: bool = False
+    #: Day-cached heating requirement, see :attr:`winter_fuel_mj`.
+    _fuel_need_day: int = -1
+    _fuel_need_mj: float = 0.0
+
     #: Litres of drinking water on hand. Water is stored, not assumed: a
     #: prairie colony with no river must haul or dig for it, and in a hard
     #: winter must melt snow, which costs fuel.
@@ -356,6 +377,36 @@ class Colony:
     @property
     def beds(self) -> int:
         return sum(b.d.beds for b in self.buildings if b.done)
+
+    @property
+    def winter_fuel_mj(self) -> float:
+        """Heating needed to reach the far side of the next cold season.
+
+        "Days of fuel left" is the wrong question in July: today's heating
+        need is zero, the ratio is infinite, and a colony reading it decides
+        it has all the firewood it could ever want -- then spends the summer
+        hauling boxes and freezes in January. Cutting and stacking fuel is a
+        *summer* job, and it is a summer job precisely because the number that
+        matters is the one below: what the winter you can already see is going
+        to cost.
+        """
+        if self._fuel_need_day == self.day:
+            return self._fuel_need_mj
+        clim = self.survey.clim
+        pop = max(1, self.population)
+        ins = max(0.6, self.insulation)
+        total = 0.0
+        for i in range(365):
+            deficit = 16.0 - clim.temp_on_day((self.day + i) % 365)
+            if deficit > 0:
+                total += deficit * pop * 0.85 / ins
+            elif i > 200 and total > 0:
+                # Past the end of the cold season we are stockpiling for; what
+                # happens the winter after is next summer's problem.
+                break
+        self._fuel_need_day = self.day
+        self._fuel_need_mj = total
+        return total
 
     @property
     def water_l_day(self) -> float:
@@ -454,6 +505,15 @@ class Colony:
         temp = self.indoor_temp()
         self._issue_clothing()
 
+        # Who did what last tick, so that jobs which only need a couple of
+        # hands do not attract the entire colony. Without this, a big
+        # perishable harvest put every single person in the kitchen
+        # permanently and nothing else got done.
+        self._job_counts = {}
+        for q in self.pawns:
+            if q.alive and q.job:
+                self._job_counts[q.job] = self._job_counts.get(q.job, 0) + 1
+
         # Assign and perform work.
         self.work_today.setdefault("_", 0.0)
         for p in list(self.pawns):
@@ -501,6 +561,7 @@ class Colony:
     def _start_day(self, r: rng.Rng) -> None:
         self.weather = daily_weather(self.survey.clim, self.day, self.seed)
         self.work_today.clear()
+        self._regrow_grass()
         # Rain and snowmelt recharge surface water; frozen ground does not.
         if self.weather.snowing:
             self.weather.snow_cover_mm += self.weather.precip_mm
@@ -531,15 +592,149 @@ class Colony:
                 self._do_work(p, "water", minutes, r)
                 self.work_today["water"] = self.work_today.get("water", 0.0) + minutes
                 return
-        if p.energy_debt_kcal > 600:
+        # Meals cost time, but they do not cost a whole tick, and a person
+        # does not sit down to eat four times an hour. Letting them do both
+        # was the worst behavioural bug in the colony: with the larder nearly
+        # empty everybody's debt sits permanently above the threshold, so
+        # every waking tick went to eating a few grams of whatever the
+        # foragers brought in, and nobody chopped, farmed or cooked their way
+        # out of it. The settlement starved with its workforce fully employed
+        # eating.
+        if p.energy_debt_kcal > 600 and p.meal_cooldown_min <= 0:
             if p.eat(self.store, r) is not None:
                 p.job = "eat"
-                return
+                p.meal_cooldown_min = MEAL_INTERVAL_MIN
+                minutes -= MEAL_MINUTES
+                if minutes <= 0:
+                    return
 
         job = self._choose_job(p, r)
         p.job = job
+        self._steer(p, job, minutes, r)
         self._do_work(p, job, minutes, r)
         self.work_today[job] = self.work_today.get(job, 0.0) + minutes
+
+    # ---- movement -------------------------------------------------------
+
+    def _steer(self, p: Pawn, job: str, minutes: float, r: rng.Rng) -> None:
+        """Walk a pawn towards wherever their current job actually is.
+
+        Purely presentational as far as the economy goes -- travel time is
+        already folded into the work rates -- but it is what turns the map
+        from a static picture into a settlement you can read at a glance.
+        You can see who is at the woodpile and who is out in the field.
+        """
+        arrived = (p.x, p.y) == (p.target_x, p.target_y)
+        if arrived:
+            p.dwell_min -= minutes
+        # Re-pick on a new job, when stuck, or after working a spot for a
+        # while. Re-picking the instant they arrive -- which is what the first
+        # version did -- means a full work-site search every single tick, for
+        # every pawn, forever.
+        if p.target_job != job or p.target_x < 0 or (arrived and p.dwell_min <= 0):
+            tx, ty = self._work_site(p, job, r)
+            p.target_x, p.target_y, p.target_job = tx, ty, job
+            p.dwell_min = r.uniform(25.0, 90.0)
+
+        if p.target_x < 0:
+            return
+        p.move_credit += p.move_speed_ms * 60.0 * minutes * 0.25
+        steps = int(p.move_credit)
+        if steps <= 0:
+            return
+        p.move_credit -= steps
+        for _ in range(min(steps, 40)):
+            if (p.x, p.y) == (p.target_x, p.target_y):
+                break
+            dx = (p.target_x > p.x) - (p.target_x < p.x)
+            dy = (p.target_y > p.y) - (p.target_y < p.y)
+            nx, ny = p.x + dx, p.y + dy
+            if not self.map.passable(nx, ny):
+                # Slide along whichever axis is still open rather than
+                # standing in a boulder looking confused.
+                if dx and self.map.passable(p.x + dx, p.y):
+                    nx, ny = p.x + dx, p.y
+                elif dy and self.map.passable(p.x, p.y + dy):
+                    nx, ny = p.x, p.y + dy
+                else:
+                    p.target_x = p.target_y = -1
+                    return
+            p.x, p.y = nx, ny
+
+    def _work_site(self, p: Pawn, job: str, r: rng.Rng) -> tuple[int, int]:
+        """Pick a plausible spot for a job, nearest-first."""
+        m = self.map
+        home = m.size // 2
+
+        def nearest(pred, max_r: int = 48):
+            """Spiral outward from the pawn and stop at the first match.
+
+            Scanning every object on the map instead was correct and cost
+            enough to add sixteen seconds to the test suite: a wooded site
+            holds ten thousand objects, and a nearby tree is usually four
+            metres away.
+            """
+            size = m.size
+            objs = m.objects
+            for rad in range(1, max_r):
+                x0, x1 = p.x - rad, p.x + rad
+                z0, z1 = p.y - rad, p.y + rad
+                for z in range(max(0, z0), min(size, z1 + 1)):
+                    on_edge_row = (z == z0 or z == z1)
+                    step = 1 if on_edge_row else (x1 - x0 if x1 > x0 else 1)
+                    for x in range(max(0, x0), min(size, x1 + 1), step):
+                        o = objs.get(z * size + x)
+                        if o is not None and pred(o):
+                            return x, z
+            return None
+
+        if job == "chop":
+            spot = nearest(lambda o: isinstance(o, terrain.Plant)
+                           and o.species.height_m > 4 and o.growth > 0.3)
+            if spot is None:
+                spot = nearest(lambda o: isinstance(o, terrain.Plant)
+                               and o.species.hay_kg > 0 and o.growth >= 0.25)
+            if spot:
+                return spot
+        elif job == "mine":
+            spot = nearest(lambda o: isinstance(o, terrain.OreBody))
+            if spot:
+                return spot
+        elif job == "farm" and self.fields:
+            f = next((f for f in self.fields if f.ripe), self.fields[0])
+            return (f.x + r.randint(0, max(0, f.w - 1)),
+                    f.y + r.randint(0, max(0, f.h - 1)))
+        elif job == "build":
+            b = next((b for b in self.buildings if not b.done), None)
+            if b:
+                return b.x, b.y
+        elif job in ("cook", "craft"):
+            want = "kitchen" if job == "cook" else ""
+            b = next((b for b in self.buildings
+                      if b.done and b.d.station and (not want or b.d.station == want)), None)
+            if b:
+                return b.x, b.y
+        elif job == "water":
+            for i in range(m.size * m.size):
+                z, x = divmod(i, m.size)
+                if terrain.TERRAIN_BY_ID[m.terrain[i]].water:
+                    return x, z
+            b = next((b for b in self.buildings if b.done and b.d.water_l_day > 0), None)
+            if b:
+                return b.x, b.y
+        elif job in ("rest", "eat"):
+            b = next((b for b in self.buildings if b.done and b.d.beds), None)
+            if b:
+                return b.x, b.y
+        elif job == "forage":
+            spot = nearest(lambda o: isinstance(o, terrain.Plant)
+                           and o.species.food_kcal > 0)
+            if spot:
+                return spot
+
+        # Fall back to milling about near the settlement.
+        return (max(1, min(m.size - 2, home + r.randint(-6, 6))),
+                max(1, min(m.size - 2, home + r.randint(-6, 6))))
 
     def _emergency(self) -> bool:
         return any(pp.bleeding_ml_min > 3 for pp in self.pawns if pp.alive)
@@ -568,16 +763,42 @@ class Colony:
     #: And an upper limit. Apparent temperature, so humidity counts.
     OUTDOOR_WORK_CEILING_C = 44.0
 
+    def _has_hay(self) -> bool:
+        """Is there standing grass worth cutting? Cached for the day.
+
+        Scanning ten thousand map objects is fine once a day and ruinous once
+        per pawn per job per tick.
+        """
+        if self._hay_day != self.day:
+            self._hay_day = self.day
+            self._hay_ok = any(
+                isinstance(o, terrain.Plant) and o.species.hay_kg > 0
+                and o.growth >= 0.25 for o in self.map.objects.values())
+        return self._hay_ok
+
     def _outdoor_safe(self) -> bool:
         felt_cold = items.wind_chill_c(self.weather.temp_c, self.weather.wind_ms)
         felt_hot = items.heat_index_c(self.weather.temp_c, self.weather.humidity)
         return (felt_cold > self.OUTDOOR_WORK_FLOOR_C
                 and felt_hot < self.OUTDOOR_WORK_CEILING_C)
 
+    #: How many people a job usefully absorbs before extra hands add little.
+    JOB_SATURATION = {"cook": 2, "doctor": 2, "craft": 2, "build": 4,
+                      "water": 2, "mine": 3}
+
     def _urgency(self, job: str, p: Pawn) -> float:
         s = self.stats
         if job in ("chop", "farm", "forage", "mine") and not self._outdoor_safe():
             return 0.0
+        u = self._raw_urgency(job, p, s)
+        cap = self.JOB_SATURATION.get(job)
+        if cap and u > 0:
+            taken = getattr(self, "_job_counts", {}).get(job, 0)
+            if taken >= cap:
+                u /= 1.0 + (taken - cap + 1) * 1.4
+        return u
+
+    def _raw_urgency(self, job: str, p: Pawn, s: dict) -> float:
         if job == "doctor":
             bleeding = sum(1 for q in self.alive
                            if q.bleeding_ml_min > 0 or
@@ -596,7 +817,7 @@ class Colony:
             # colony suffers, and preserving it beats almost any other work.
             at_risk = 0.0
             for st in self.store.stacks.values():
-                if "food" in st.item.tags and 0 < st.item.shelf_days < 60:
+                if "food" in st.item.tags and 0 < st.item.shelf_days < PERISHABLE_DAYS:
                     if st.freshness < 0.5:
                         at_risk += st.amount * st.item.kcal_kg
             if at_risk > 40000:
@@ -614,18 +835,37 @@ class Colony:
             season = 1.0 if self.survey.clim.temp_on_day(self.day) > 4 else 0.1
             return 4.0 * season * p.skill_factor("farming")
         if job == "forage":
-            hungry = s.get("food_days", 9.0) < 12.0
-            if not hungry or self.forage_stock_kcal < self.forage_annual_kcal * 0.05:
+            if self.forage_stock_kcal < self.forage_annual_kcal * 0.05:
                 return 0.0
-            return 3.6
+            if s.get("food_days", 9.0) < 12.0:
+                return 3.6
+            # People also forage for greens, not only for calories. Gating
+            # this on hunger alone meant a colony with a full granary and no
+            # fresh food never picked a berry, and died of scurvy in the
+            # hungry gap before its first harvest -- which is historically
+            # exactly when scurvy struck, but not when the woods are full of
+            # fruit and nobody thought to look.
+            worst = max((q.vit_c_debt_days for q in self.alive), default=0.0)
+            if worst > 20.0 and not self.store.best_vitamin_c():
+                return 3.2 * min(1.0, worst / 45.0)
+            return 0.0
         if job == "chop":
-            fuel_days = s.get("fuel_days", 9.0)
-            wood = self.store.amount("wood")
+            # Measured against the winter ahead, not against today's weather.
+            ready = self.store.fuel_mj() / max(1.0, self.winter_fuel_mj)
             if self.survey.timber_m3_ha < 5:
-                return 0.0
-            if fuel_days < 20:
+                # Treeless. Gating this on the survey alone used to return
+                # zero here, so a prairie colony never gathered fuel at all
+                # and froze once its starting woodpile ran out.
+                if not self._has_hay():
+                    return 0.0
+                if ready < 0.15:
+                    return 6.0
+                return 2.4 if ready < 1.0 else 0.0
+            if ready < 0.25:
                 return 5.0
-            return 2.0 if wood < 2000 else 0.4
+            if ready < 1.0:
+                return 2.2
+            return 0.4 if self.store.amount("wood") < 2000 else 0.0
         if job == "build":
             pending = [b for b in self.buildings if not b.done]
             return (3.8 if pending else 0.0) * p.skill_factor("construction")
@@ -722,7 +962,15 @@ class Colony:
     #: budget more than anything else it does.
     CHOP_MIN_PER_KG = 0.055
 
+    #: And per kilogram of twisted prairie hay. Sixty times the labour of
+    #: felling timber, because it is: cutting, raking, hauling and then
+    #: twisting armfuls of grass into something that will sit in a stove for
+    #: more than a minute. A woodland site is worth a great deal, and this is
+    #: the number that says so.
+    HAY_MIN_PER_KG = 3.5
+
     def _work_chop(self, p: Pawn, eff: float, r: rng.Rng) -> None:
+        """Bring in fuel: timber where there is any, hay where there is not."""
         budget = eff * p.skill_factor("construction")
         got = 0.0
         for i, obj in list(self.map.objects.items()):
@@ -749,6 +997,30 @@ class Colony:
         if got > 0:
             self.store.add("wood", got)
             p.learn("construction", eff * 0.5)
+            return
+
+        # Nothing to fell. On grassland that is not a failed search, it is the
+        # site: Iowa is the finest farmland on the planet and has no trees on
+        # it at all. Cut hay instead.
+        hay = 0.0
+        for i, obj in list(self.map.objects.items()):
+            if budget <= 0:
+                break
+            if not isinstance(obj, terrain.Plant) or obj.species.hay_kg <= 0:
+                continue
+            if obj.growth < 0.25:
+                continue
+            kg = obj.hay_kg
+            cost = kg * self.HAY_MIN_PER_KG
+            share = min(1.0, budget / cost) if cost > 0 else 0.0
+            hay += kg * share
+            budget -= cost * share
+            # Grass is cut, not killed. It comes back next season, which is
+            # why a colony can live off the same acre year after year.
+            obj.growth *= 1.0 - 0.9 * share
+        if hay > 0:
+            self.store.add("hay", hay)
+            p.learn("construction", eff * 0.3)
 
     def _work_farm(self, p: Pawn, eff: float, r: rng.Rng) -> None:
         skill = p.skill_factor("farming")
@@ -777,6 +1049,7 @@ class Colony:
                     f.tended = 0.0
                     f.harvested_m2 = 0.0
                     f.harvest_kg = 0.0
+                    f.water_deficit_mm = 0.0
                 return
             if f.crop is None:
                 # Sow, if anything will ripen in the time left this year.
@@ -791,6 +1064,13 @@ class Colony:
                 f.sown_day = self.day
                 f.gdd = 0.0
                 f.tended = 0.2
+                # A season's water balance belongs to that season's crop. It
+                # used to carry over, and since it only ever grew while
+                # something was in the ground, every field on the map decayed
+                # monotonically towards the yield floor: a colony's tenth
+                # harvest was a tenth of its first no matter how much it
+                # rained, and nothing could ever bring the land back.
+                f.water_deficit_mm = 0.0
                 self.note(f"{p.name} sowed {crop.name}")
                 p.learn("farming", eff)
                 return
@@ -891,9 +1171,10 @@ class Colony:
         # Preserve first when the larder is turning, cook fresh otherwise.
         order = ["cook_meat", "cook_meal"]
         for st in self.store.stacks.values():
-            if "food" in st.item.tags and 0 < st.item.shelf_days < 60 \
+            if "food" in st.item.tags and 0 < st.item.shelf_days < PERISHABLE_DAYS \
                     and st.freshness < 0.5:
-                order = ["dry_produce", "dry_berries", "preserve"] + order
+                order = ["dry_potato", "dry_produce", "dry_berries",
+                         "preserve"] + order
                 break
         for key in order:
             rec = items.RECIPES.get(key)
@@ -968,6 +1249,22 @@ class Colony:
         self.forage_stock_kcal = min(annual * 0.5,
                                      self.forage_stock_kcal + growth)
 
+    def _regrow_grass(self) -> None:
+        """Grass cut for fuel comes back, over a season, while it is warm.
+
+        Once a day, because it is a full scan of the map's objects and the
+        answer does not change in ten minutes. Roughly four months from
+        stubble to standing, which is what a temperate growing season is --
+        and it means a colony that mows the same acre every winter finds
+        rather less of it there the second time.
+        """
+        if self.survey.clim.temp_on_day(self.day) < 5.0:
+            return
+        for o in self.map.objects.values():
+            if isinstance(o, terrain.Plant) and o.species.hay_kg > 0 \
+                    and o.growth < 1.0:
+                o.growth = min(1.0, o.growth + 1.0 / 120.0)
+
     def _tick_water(self, minutes: float) -> None:
         gain = self.water_l_day * minutes / MINUTES_PER_DAY
         # Rain fills whatever is out in it.
@@ -978,8 +1275,15 @@ class Colony:
     # ---- background systems ----
 
     def _consume_fuel(self, mj: float) -> bool:
-        """Burn stored fuel. Returns False if there is not enough."""
-        for key in ("charcoal", "coal", "wood", "plank", "oil"):
+        """Burn stored fuel. Returns False if there is not enough.
+
+        Cheapest thing first. The order used to start at charcoal, which is
+        made from wood at a 5:1 loss and is the input to every smelt the
+        colony will ever do -- burning it for warmth while a woodpile sits
+        outside is the most expensive possible way to be warm. Planks are last
+        for the same reason: sawn lumber is a building, not a fire.
+        """
+        for key in ("hay", "wood", "coal", "oil", "charcoal", "plank"):
             it = items.ITEMS[key]
             if it.fuel_mj_kg <= 0:
                 continue

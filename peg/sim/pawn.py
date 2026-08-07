@@ -230,10 +230,28 @@ class Pawn:
     vit_c_debt_days: float = 0.0
     protein_debt_g: float = 0.0
     morale: float = 0.7
+    #: Minutes until this person will sit down to another meal. People eat a
+    #: few times a day, not continuously; without a refractory period a hungry
+    #: colonist retries every tick and, because eating pre-empts work, a
+    #: short-of-food colony spends every waking minute chewing scraps instead
+    #: of growing, cutting or cooking anything. That is a livelock, and it is
+    #: what kept a six-person settlement pinned at zero stores for months.
+    meal_cooldown_min: float = 0.0
 
     # ---- state ----
     x: int = 0
     y: int = 0
+    #: Where they are walking to, and what for. Work is costed in
+    #: person-minutes regardless, but people who never move look like a pile
+    #: of tokens rather than a settlement, and you cannot see what the colony
+    #: is doing.
+    target_x: int = -1
+    target_y: int = -1
+    target_job: str = ""
+    #: Fractional metres of movement carried between ticks.
+    move_credit: float = 0.0
+    #: Minutes to keep working this spot before looking for another.
+    dwell_min: float = 0.0
     asleep: bool = False
     dead: bool = False
     cause_of_death: str = ""
@@ -434,6 +452,7 @@ class Pawn:
             return []
         ev: list[str] = []
         days = minutes / 1440.0
+        self.meal_cooldown_min = max(0.0, self.meal_cooldown_min - minutes)
 
         # --- bleeding -----------------------------------------------------
         bleed = self.bleeding_ml_min

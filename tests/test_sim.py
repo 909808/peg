@@ -10,7 +10,8 @@ from peg import rng                                      # noqa: E402
 from peg.local import terrain                            # noqa: E402
 from peg.meta import world as world_mod                  # noqa: E402
 from peg.sim import combat, items                        # noqa: E402
-from peg.sim.colony import Colony, daily_weather         # noqa: E402
+from peg.sim.colony import (Colony, daily_weather,       # noqa: E402
+                            PERISHABLE_DAYS)
 from peg.sim.pawn import Pawn                            # noqa: E402
 from peg.world import site                               # noqa: E402
 
@@ -299,6 +300,117 @@ class TestColony(unittest.TestCase):
         for _ in range(365 * 24):
             c.tick(60)
         self.assertGreater(c.population, 0, "colony wiped out on prime farmland")
+
+    def test_hunger_does_not_stop_the_colony_working(self):
+        """A short-of-food colony must still be able to work its way out.
+
+        Eating used to consume a pawn's entire tick and could be retried every
+        tick, so once everyone's calorie debt sat above the threshold the whole
+        settlement spent every waking minute chewing scraps and nobody farmed,
+        cut fuel or cooked. It starved with its workforce fully employed.
+        """
+        c = _colony(people=1)
+        c.store.add("vegetables", 50.0)
+        p = c.alive[0]
+        p.energy_debt_kcal = 2200.0
+        c._run_pawn(p, 60, False, rng.Rng(1))
+        self.assertLess(p.energy_debt_kcal, 2200.0, "did not eat when hungry")
+        self.assertNotEqual(p.job, "eat", "a whole hour went on a single meal")
+
+        # And over six days on a trickle of food -- which is what foraging
+        # supplies -- the colony must spend most of its time on work.
+        c = _colony(people=6)
+        c.store.add("wood", 200)
+        c.add_field(10, 10, 40, 40)
+        for q in c.alive:
+            q.energy_debt_kcal = 2200.0
+        worked = awake = 0
+        for _ in range(6 * 24):
+            c.store.add("vegetables", 1.0)
+            c.tick(60)
+            for q in c.alive:
+                if q.job != "rest":
+                    awake += 1
+                    worked += q.job != "eat"
+        self.assertGreater(worked, awake * 0.6,
+                           f"only {worked}/{awake} waking ticks did any work")
+
+    def test_cooking_does_not_create_calories(self):
+        """No food recipe may produce more energy than it consumes.
+
+        Cooking earns a modest digestibility uplift; drying is a net loss.
+        Anything above that is a perpetual motion machine with a kitchen.
+        """
+        for key, rec in items.RECIPES.items():
+            out = sum(items.ITEMS[k].kcal_kg * n for k, n in rec.outputs)
+            if out <= 0:
+                continue
+            inp = sum(items.ITEMS[k].kcal_kg * n for k, n in rec.inputs)
+            self.assertGreater(inp, 0, f"{key} makes food out of nothing")
+            self.assertLessEqual(out / inp, 1.25,
+                                 f"{key} multiplies calories {out / inp:.2f}x")
+
+    def test_the_root_harvest_can_be_kept(self):
+        """Potatoes must have a route into storage.
+
+        A temperate colony's main crop keeps for 120 days and is harvested in
+        August. With no recipe taking it and a 60-day "perishable" threshold
+        that excluded it, two tonnes came in every year and composted by
+        Christmas while the cook decided nothing was urgent.
+        """
+        self.assertIn("potato", [k for r in items.RECIPES.values()
+                                 for k, _ in r.inputs])
+        self.assertLess(items.ITEMS["potato"].shelf_days, PERISHABLE_DAYS,
+                        "the main crop does not count as worth preserving")
+
+    def test_a_treeless_site_can_still_heat_itself(self):
+        """Iowa is the best farmland on Earth and has no trees on it.
+
+        Fuel work was gated on the survey's standing timber, so a prairie
+        colony never gathered anything, burned its starting woodpile and
+        froze. Real settlers twisted prairie hay; so does this one.
+        """
+        c = _colony(people=6)
+        self.assertLess(c.survey.timber_m3_ha, 5.0, "test site grew trees")
+        c.store.add("wood", 40)
+        p = c.alive[0]
+        c._work_chop(p, 600.0, rng.Rng(1))
+        self.assertGreater(c.store.amount("hay"), 0.0,
+                           "nothing to burn and nothing gathered")
+
+    def test_fuel_is_cut_for_the_winter_ahead(self):
+        """Stockpiling is a summer job, so the target cannot be today's need.
+
+        Judged on days-of-fuel-left a colony in July divides by nearly zero,
+        concludes it has centuries of firewood and does no fuel work at all.
+        """
+        c = _colony(people=6)
+        c.store.add("wood", 500)
+        c.day = 180                                    # midsummer
+        self.assertGreater(c.winter_fuel_mj, 1000.0,
+                           "no heating requirement seen from midsummer")
+
+    def test_drought_damage_does_not_outlive_the_crop(self):
+        """A field's water deficit belongs to one season, not to the land.
+
+        It was never reset, and only ever grew while something was in the
+        ground, so every field decayed monotonically towards the yield floor:
+        a colony's tenth harvest was a fraction of its first however much it
+        rained, and nothing could bring the land back.
+        """
+        c = _colony()
+        f = c.add_field(10, 10, 40, 40)
+        f.crop = items.CROPS["wheat"]
+        f.gdd = f.crop.gdd_needed + 10
+        f.tended = 1.0
+        f.water_deficit_mm = 300.0
+        p = c.alive[0]
+        for _ in range(200):                           # reap it all, then sow
+            c._work_farm(p, 600.0, rng.Rng(1))
+            if f.crop is not None and f.crop.key != "wheat":
+                break
+        self.assertEqual(f.water_deficit_mm, 0.0,
+                         "last season's drought carried into the new crop")
 
     def test_water_can_be_fetched(self):
         c = _colony()
