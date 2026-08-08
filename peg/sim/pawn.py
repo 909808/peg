@@ -19,7 +19,7 @@ import math
 from dataclasses import dataclass, field
 
 from .. import rng
-from . import items
+from . import disease, items
 
 # --------------------------------------------------------------------------
 # anatomy
@@ -214,6 +214,9 @@ class Pawn:
 
     parts: dict[str, Part] = field(default_factory=dict)
     injuries: list[Injury] = field(default_factory=list)
+    illnesses: list[disease.Illness] = field(default_factory=list)
+    #: Days of acquired immunity remaining, by disease key.
+    immunities: dict[str, float] = field(default_factory=dict)
     skills: dict[str, Skill] = field(default_factory=dict)
     traits: list[str] = field(default_factory=list)
 
@@ -230,6 +233,18 @@ class Pawn:
     vit_c_debt_days: float = 0.0
     protein_debt_g: float = 0.0
     morale: float = 0.7
+    #: Net morale contribution from relationships: a partner, friends, enemies
+    #: and grief, resolved in :mod:`peg.sim.social` and pushed here as one
+    #: number so nothing else in the simulation has to know that module exists.
+    social_morale: float = 0.0
+    #: Days left of a pregnancy, and by whom. A colony that cannot replace its
+    #: dead is on a countdown no amount of good farming fixes.
+    pregnant_days: float = 0.0
+    pregnant_by: str = ""
+    #: What this person will be when grown. Stored so a child grows towards
+    #: their own adult size rather than a population average.
+    adult_height_cm: float = 170.0
+    adult_mass_kg: float = 66.0
     #: Minutes until this person will sit down to another meal. People eat a
     #: few times a day, not continuously; without a refractory period a hungry
     #: colonist retries every tick and, because eating pre-empts work, a
@@ -276,17 +291,30 @@ class Pawn:
         age = r.uniform(*age_range)
         height = r.clamped_gauss(176 if male else 163, 7.5, 145, 200)
         bmi = r.clamped_gauss(23.0, 2.6, 17.0, 32.0)
+        # Children are not small adults, and a newborn built at 176 cm and
+        # 71 kg eats like one -- which would quietly double a colony's food
+        # bill the moment anyone was born. Height follows roughly the real
+        # growth curve to adult stature at eighteen.
+        adult_h = height
+        adult_m = bmi * (height / 100.0) ** 2
+        if age < 18.0:
+            height *= 0.28 + 0.72 * (age / 18.0) ** 0.62
+            bmi *= 0.72 + 0.28 * (age / 18.0)
         mass = bmi * (height / 100.0) ** 2
         p = Pawn(
             name=f"{r.choice(FIRST_NAMES)} {r.choice(SURNAMES)}",
             age=age, male=male, mass_kg=mass, height_cm=height,
             fat_kg=max(4.0, mass * r.uniform(0.10, 0.24)),
+            adult_height_cm=adult_h, adult_mass_kg=adult_m,
         )
         for s in SKILLS:
             sk = p.skills[s]
             sk.aptitude = r.clamped_gauss(1.0, 0.22, 0.5, 1.6)
-            # Everyone arrives having done something with their life.
+            # Everyone arrives having done something with their life -- unless
+            # they have not had one yet.
             lvl = max(0, int(r.clamped_gauss(2.5, 2.4, 0, 9)))
+            if age < 18.0:
+                lvl = int(lvl * max(0.0, (age - 5.0) / 13.0))
             sk.level = lvl
             sk.xp = xp_for_level(lvl)
         # One or two traits, never contradictory.
@@ -338,6 +366,16 @@ class Pawn:
             base *= max(0.3, 1.0 - self.pain * 0.4)
         elif name == "manipulation":
             base *= max(0.1, self.capacity_raw("consciousness"))
+
+        # Illness drags on whatever it attacks, in proportion to how far it
+        # has run. A colonist with influenza is not incapacitated, they are
+        # slow and short of breath -- which is enough to lose a harvest.
+        for ill in self.illnesses:
+            if not ill.showing:
+                continue
+            for cap, w in ill.d.hits:
+                if cap == name:
+                    base *= max(0.05, 1.0 - w * min(1.0, ill.severity))
 
         return rng.clamp01(base)
 
@@ -392,7 +430,20 @@ class Pawn:
             s *= max(0.35, 1.0 - (self.sleep_debt_h - 8) / 24.0)
         if self.energy_debt_kcal > 20000:
             s *= 0.75
+        # Children work, because on a subsistence holding children always
+        # worked -- but a six-year-old minding hens is not a field hand, and a
+        # colony counting them as one would starve on paper it thought was
+        # sound. Nothing under five is any use at all.
+        if self.age < 18.0:
+            s *= max(0.0, min(1.0, (self.age - 4.0) / 13.0))
+        # And the very old slow down.
+        elif self.age > 60.0:
+            s *= max(0.35, 1.0 - (self.age - 60.0) * 0.022)
         return max(0.0, s)
+
+    @property
+    def child(self) -> bool:
+        return self.age < 14.0
 
     @property
     def move_speed_ms(self) -> float:
@@ -533,8 +584,9 @@ class Pawn:
             self.cause_of_death = "heatstroke"
             return [f"{self.name} died of heatstroke"]
 
-        # --- injuries -----------------------------------------------------
+        # --- injuries and illness -----------------------------------------
         ev.extend(self._tick_injuries(minutes, rand))
+        ev.extend(self._tick_illness(days))
 
         # --- morale -------------------------------------------------------
         target = 0.75
@@ -546,6 +598,10 @@ class Pawn:
             target -= 0.2
         if temp_c < 0 or temp_c > 33:
             target -= 0.12
+        # Who you are with, and who you have lost. A colonist grieving a
+        # partner works at about two thirds speed for a season, which is the
+        # mechanism by which a raid in November costs you the spring sowing.
+        target += self.social_morale
         target *= self.mod("morale_floor")
         self.morale += (target - self.morale) * min(1.0, days * 2.0)
         self.morale = rng.clamp01(self.morale)
@@ -596,6 +652,61 @@ class Pawn:
         rate = min(1.0, minutes / 60.0 * 0.55)
         self.core_temp_c += (target - self.core_temp_c) * rate
         self.core_temp_c = rng.clamp(self.core_temp_c, 20.0, 45.0)
+
+    def catch(self, key: str) -> bool:
+        """Contract a disease, unless already carrying it or immune to it."""
+        if any(i.key == key for i in self.illnesses):
+            return False
+        if self.immunities.get(key, 0.0) > 0.0:
+            return False
+        d = disease.DISEASES[key]
+        self.illnesses.append(
+            disease.Illness(key, incubating_days=d.incubation_days))
+        return True
+
+    @property
+    def ill(self) -> bool:
+        return any(i.showing for i in self.illnesses)
+
+    def _tick_illness(self, days: float) -> list[str]:
+        """Run the immunity race.
+
+        Nutrition, rest and warmth all feed the immunity side, which is the
+        whole reason this is worth simulating: illness is not an independent
+        misfortune, it is the bill for a colony that is already behind.
+        """
+        for key in list(self.immunities):
+            self.immunities[key] -= days
+            if self.immunities[key] <= 0.0:
+                del self.immunities[key]
+        if not self.illnesses:
+            return []
+        ev: list[str] = []
+        fed = 1.0 - min(1.0, self.energy_debt_kcal / 12000.0)
+        rested = 1.0 - min(1.0, self.sleep_debt_h / 24.0)
+        warm = 1.0 if self.core_temp_c >= 36.0 else max(
+            0.0, 1.0 - (36.0 - self.core_temp_c) / 3.0)
+        fed *= max(0.35, 1.0 - self.scurvy)
+
+        for ill in list(self.illnesses):
+            was_showing = ill.showing
+            ill.tick(days, fed=fed, rested=rested, warm=warm)
+            if ill.showing and not was_showing:
+                ev.append(f"{self.name} has come down with {ill.d.name}")
+            if not ill.showing:
+                continue
+            # Dysentery kills by dehydration, not by the infection itself.
+            if ill.d.fluid_l_day:
+                self.water_debt_l += ill.d.fluid_l_day * days * ill.severity
+            if ill.immunity >= 1.0:
+                self.illnesses.remove(ill)
+                self.immunities[ill.key] = ill.d.immune_days
+                ev.append(f"{self.name} has recovered from {ill.d.name}")
+            elif ill.severity >= 1.0:
+                self.dead = True
+                self.cause_of_death = ill.d.name
+                return [f"{self.name} died of {ill.d.name}"]
+        return ev
 
     def _tick_injuries(self, minutes: float, rand: rng.Rng) -> list[str]:
         ev: list[str] = []

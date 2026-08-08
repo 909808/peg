@@ -187,6 +187,97 @@ turnips and watches eighteen of them rot in a fortnight, because three people
 cannot dry twenty tonnes of roots in two weeks. That is a real lesson about
 planting what you can process, and the log says so plainly.
 
+## Livestock, and why it was worth the trouble
+
+Animals were the largest acknowledged gap in this project for a long time, and
+adding them turned out not to be adding a system so much as closing three that
+were already open at one end.
+
+- **Fuel.** A prairie colony has no timber and cuts hay at sixty times the
+  labour per kilogram of felling a tree. What settlers actually burned was
+  dung, and dung requires an animal at the other end of the grass.
+- **Fertility.** Crop yield ran off the soil order alone, so a field was as
+  good in its twentieth year as its first. Subsistence farming is a nutrient
+  loop — grass feeds the animal, the animal manures the field, the field feeds
+  the people — and without stock in the middle the loop is open.
+- **Food that arrives daily.** Grain comes once, in August, and has to last.
+  Milk and eggs come every morning and carry what stored grain does not. The
+  historical answer to a winter of dried stores is not clever storage, it is a
+  cow.
+
+The figures are real and were not tuned afterwards: 12 kg of dry matter a day
+for a dairy cow, 15 litres of milk, 120 g of feed for a hen against 250 eggs a
+year, 2.5 kg of fleece a shearing. The interesting behaviour falls out of them
+rather than being authored. A hectare of tallgrass prairie carries about 5.5
+tonnes of standing dry matter, a four-month winter costs a cow a tonne and a
+half of hay, and the arithmetic between those two is the reason the colony in
+the test settles at one cow rather than three — and does the culling in
+November, because November is when you can see both numbers.
+
+### What went wrong here, too
+
+1. **Grazing and haymaking drew on separate pools** in the first draft, which
+   removed the only real decision: every kilogram a cow eats in August is a
+   kilogram not in the hayrick in January. They now draw on the same standing
+   grass.
+2. **Nothing needed hay except the stove.** Dung solved heating so completely
+   that the colony stopped cutting grass entirely, and the herd starved in
+   February — taking the dung with it. Fuel work now answers to fodder as well.
+3. **Culling was judged year-round**, so the colony looked at an empty hayrick
+   in March — when the grass is about to return and the hay is *supposed* to be
+   gone — and butchered two of its three cattle on the spot.
+4. **Culling took only the heaviest-eating species** and gave up if that
+   species turned out to be all chicks, which aborted the whole cull; a flock
+   of forty-six hens went into a winter untouched.
+5. **Nothing stopped breeding.** Eight hens became a hundred in one summer and
+   then starved together, which is a thing that happens to nobody who has ever
+   kept hens. Breeding is now bounded by the fodder the colony has actually
+   put by — not as a population cap, but as the stockman.
+
+## People, and the cost of losing them
+
+Until recently this was a model of fourteen metabolisms that happened to share
+a granary. That is a defensible way to model calories and a poor way to model a
+settlement, because what decides whether a small isolated group holds together
+is not its food supply.
+
+Opinions accumulate from working within sight of one another, and they are
+stored per direction rather than shared, because unrequited regard is real and
+is one of the few genuinely interesting social facts in a group this size. Long
+mutual regard makes couples; couples plus food plus beds make children;
+children cost fifteen years of calories at a fraction of an adult's work rate
+and then become the colony's only means of replacing itself.
+
+Grief is the load-bearing piece. When someone dies, everyone who cared about
+them takes a morale penalty proportional to the bond, decaying over about four
+months. Morale drives work speed. So a death in November is a slow spring, and
+a raid that kills two people costs considerably more than two pairs of hands —
+which is the entire reason to model any of this.
+
+## Illness that is a bill, not a dice roll
+
+There are two diseases and no event deck. Both are consequences of decisions
+the player is already making with systems that already existed:
+
+- **Enteric infection** from drinking surface water that was not boiled. The
+  colony already stores litres and already burns megajoules; boiling is the
+  trade between them, and skipping it to save fuel is a real historical
+  mistake with a real historical result.
+- **Influenza** from cold, exhaustion and more people than beds. The colony
+  already tracks both.
+
+Each runs as a race between severity and acquired immunity, with the immunity
+rate set by how well fed, rested and warm the patient is. That is the reason
+it is worth simulating at all: illness is not independent misfortune, it is
+the bill for a colony that is already behind. Nursing does not cure anyone, it
+shifts the rate — which is what nursing was.
+
+The first version had no acquired immunity after recovery, so the people who
+recovered first were immediately reinfected by the people who recovered last,
+and an outbreak became a closed loop that emptied the settlement over a
+hundred and fifty days of alternating "recovered" and "fallen ill" log lines.
+Recovery now confers months of immunity, and an outbreak ends.
+
 ## Combat: geometry over percentages
 
 Hit probability is the shooter's total dispersion — mechanical MOA plus a human
@@ -286,8 +377,13 @@ matters about an interface.
   that is presentational, and deliberately so: the economy is costed in
   person-minutes either way. A* exists and is used for combat, where the
   metre-by-metre positions actually decide the outcome.
-- **Livestock.** The largest genuine gap, and where I would go next. It is also
-  now a slightly embarrassing one: the prairie fuel problem has a well-known
-  historical answer this model cannot express, which is that you burn dung.
-  Animals would change the food model, the fuel model and the soil fertility
-  model at once, which is why they are a project rather than an afternoon.
+- **Wild animals.** Livestock now exists; hunting is still folded into
+  foraging, and predators do not exist at all. A wolf taking a lamb is a real
+  cost of keeping stock on open ground and this model cannot express it.
+- **Trade between factions.** Items carry a barter value and nothing uses it.
+  Stewards can share food inside their own network but cannot deal across the
+  table, which removes the whole non-violent half of competing for the same
+  ground.
+- **A player-set work roster.** Jobs are allocated purely by urgency. Being
+  able to say "Kaia only doctors" is most of what makes a colony feel like
+  yours to run, and it is the next thing I would add.

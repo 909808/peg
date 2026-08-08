@@ -105,13 +105,25 @@ for 8 people. Sleeping out costs calories and morale."* — and **Find my people
 snaps the camera to wherever your colonists have wandered off to. A one-screen
 briefing explains the premise the first time you open the page.
 
+**It has textures, and they ship inside the page.** Colonists, animals, trees,
+rocks and ore seams are hand-drawn pixel sprites; ground is baked at six
+subpixels a tile with a surface pattern that belongs to its material, so grass
+has tufts, gravel has chips and water has ripple bands. Nothing is fetched from
+a CDN and no image files ship: a sprite is rows of characters indexing a
+palette, painted once into a cached canvas. That keeps the whole game one
+dependency-free file that works offline — and it means a colonist's skin, hair
+and coat can be recoloured per person from one drawing, so eight people look
+like eight people. Colonists face the way they are walking.
+
 **It runs at sixty frames a second.** The whole site is fetched once as packed
-bytes and baked to an offscreen canvas at one pixel per tile; panning and
-zooming redraw locally and make **no network requests at all**. A frame costs
-0.5–1.1 ms against a 16.7 ms budget, and the page is interactive in about a
-second. An earlier version fetched a viewport on every keystroke and rendered
-three thousand individual `arc()` calls per frame, which is exactly as bad as it
-sounds.
+bytes and baked to an offscreen canvas; panning and zooming redraw locally and
+make **no network requests at all**. A frame costs 1–3 ms against a 16.7 ms
+budget, and the page is interactive in about a second. Sprites are drawn only
+above the zoom where they are legible — below that the object tint baked into
+the ground already reads as woodland, and there can be twenty thousand trees on
+screen. An earlier version fetched a viewport on every keystroke and rendered
+three thousand individual `arc()` calls per frame, which is exactly as bad as
+it sounds.
 
 **Axes are X / Z / Y.** X is east, Z is north, **Y is up**. The default view is
 the **X/Z plane**, top-down, looking at the ground. The switch at the top left
@@ -150,6 +162,12 @@ view reads as a settlement rather than a pile of tokens: you can see who is out
 in the field, who is at the woodpile and who is inside. Labels appear on hover
 rather than permanently, because eight names stacked on one cabin is not
 information.
+
+The **Your people** panel is the roster: name, age, best skill, traits, what
+they are doing right now, whether they are hurt, ill or expecting, and who they
+are close to — *"Zane Beaumont, 53 · construction 6 · asthmatic, anxious ·
+dislikes Lars Espinoza (−19)"*. All of that was already in the simulation and
+none of it was reaching the screen.
 
 There is still a full terminal client (`peg play`) — it is genuinely useful
 over SSH, and it is what the headless `peg observe` mode is built on.
@@ -210,6 +228,38 @@ composted. And Iowa, the best cropland on the planet, has no trees on it: a
 prairie colony heats itself by cutting and twisting hay at sixty times the
 labour per kilogram of felling timber, which is what actually happened to the
 people who settled it.
+
+**The animals close the loops.** Livestock is not a side activity here, it is
+the thing that joins the other systems together. Grass becomes hay; hay
+becomes a cow through a winter; the cow becomes milk every morning, dung for
+the fire, manure for the field, wool for the coats and, eventually, meat. Take
+any one of those away and something else stops working — which is exactly why
+a smallholding kept animals it could barely feed.
+
+The numbers are the real ones and the consequences follow from them without
+being authored. A dairy cow eats 12 kg of dry matter a day, so a four-month
+winter is a tonne and a half of hay per cow, which at 3.5 person-minutes a
+kilogram is why you keep three cattle and not thirty. When autumn comes and
+the hayrick will not cover the herd, the colony counts the mouths against the
+hay and butchers the difference — in November, which is what Martinmas *was*.
+
+**People are attached to each other.** Colonists form opinions from working
+alongside one another, and the opinions are asymmetric, because unrequited
+regard is a real thing. Long high regard makes couples; couples and enough
+food make children; children cost fifteen years and then become the colony.
+And when someone dies, everyone who cared about them grieves for about four
+months — which lowers morale, which slows work, which is the mechanism by
+which a raid in November costs you the spring sowing.
+
+**Illness comes from your own decisions, not from an event deck.** There are
+two diseases and both are bills for something the player chose. Enteric
+infection comes from drinking surface water you did not spend the fuel to
+boil. Influenza comes from cold, exhaustion and too many people in too few
+beds. Each runs as a race between severity and immunity, where the immunity
+side is set by how well fed, rested and warm the patient is — so an outbreak
+passes through a well-provisioned colony in a week and empties a badly
+provisioned one. Nursing does not cure anyone; it shifts the rate, which is
+what nursing did.
 
 **Combat is geometry, not percentages.** A weapon has a bullet mass, a muzzle
 velocity, a ballistic coefficient and a dispersion in MOA. Your shooter's own
@@ -285,7 +335,10 @@ peg/world/biome.py    19 biomes, 13 soil orders
 peg/world/site.py     the survey — the shared perception of the planet
 peg/local/terrain.py  1 m tiles, chunked and lazy
 peg/sim/items.py      materials, nutrition, crops, recipes, all in real units
-peg/sim/pawn.py       bodies, capacities, injuries, metabolism
+peg/sim/pawn.py       bodies, capacities, injuries, metabolism, growing up
+peg/sim/livestock.py  the animal economy: feed, milk, wool, dung, manure
+peg/sim/social.py     opinions, couples, children, grief
+peg/sim/disease.py    the immunity race, and the two diseases that killed people
 peg/sim/colony.py     work allocation, building, farming, heating, water
 peg/sim/combat.py     ballistics, cover, suppression, tactics
 peg/meta/faction.py   factions, doctrines, settlements
@@ -303,7 +356,7 @@ run.sh, run.bat       double-click launchers
 ```
 
 ```bash
-python3 -m unittest discover -s tests -t .    # 110 tests
+python3 -m unittest discover -s tests -t .    # 127 tests
 python3 tools/build.py                        # single-file build
 python3 tools/bake_earth.py                   # refresh Earth data (needs network)
 ```

@@ -188,11 +188,16 @@ FLORA: tuple[Species, ...] = (
     Species("juniper", "juniper", "t", 5, 120, 400, 25, ("shrubland", "steppe", "alpine")),
     Species("dwarf_birch", "dwarf birch", "\"", 1, 20, 0, 8, ("tundra", "alpine")),
     Species("saxaul", "saxaul", "\"", 3, 90, 0, 15, ("desert", "semidesert", "steppe")),
+    # A grass "plant" is the sward on its patch, not one tussock: at the
+    # density the generator places them these figures come to about 5.5 t/ha
+    # of standing dry matter on tallgrass prairie, which is what tallgrass
+    # prairie actually carries. At 0.6 it came to 1.5 t/ha, and a colony could
+    # not cut enough hay to feed one cow through a winter.
     Species("bunchgrass", "bunchgrass", "\"", 1, 0, 260, 1,
             ("grassland", "steppe", "savanna", "tundra", "semidesert", "shrubland"),
-            hay_kg=0.6),
+            hay_kg=2.2),
     Species("reed", "reed", "\"", 3, 8, 300, 2, ("wetland", "mangrove"),
-            hay_kg=1.4),
+            hay_kg=4.0),
     Species("berry_bush", "berry bush", "\"", 2, 15, 3400, 4,
             ("temp_broadleaf", "temp_conifer", "boreal", "tundra", "temp_rain")),
 )

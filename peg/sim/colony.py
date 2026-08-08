@@ -23,7 +23,7 @@ from .. import rng
 from ..local import terrain
 from ..world import climate as climate_mod
 from ..world import site as site_mod
-from . import items
+from . import disease, items, livestock, social
 from .pawn import Pawn
 
 MINUTES_PER_DAY = 1440
@@ -106,6 +106,10 @@ BUILDINGS: dict[str, BuildingDef] = {b.key: b for b in (
                 water_l_day=400, blocks=False),
     BuildingDef("granary", "granary", "G", (("plank", 260), ("stone", 60)), 900,
                 footprint=9, storage_kg=6000, cover=0.6),
+    BuildingDef("byre", "byre", "n", (("wood", 400), ("stone", 40)), 1100,
+                footprint=16, insulation=0.9, storage_kg=800, cover=0.6),
+    BuildingDef("coop", "hen house", "n", (("wood", 90),), 260,
+                footprint=4, insulation=0.5, cover=0.4, blocks=False),
     BuildingDef("cold_store", "cold store", "C",
                 (("stone", 400), ("plank", 120)), 1600,
                 footprint=9, storage_kg=2500, cooled=True, cover=0.7),
@@ -162,6 +166,10 @@ class Field:
     #: stop and resume without losing the rest of the field.
     harvested_m2: float = 0.0
     harvest_kg: float = 0.0
+    #: Kilograms of manure spread on this field for the current crop. Without
+    #: livestock this is always zero and the field yields what the soil order
+    #: says, forever -- which is how subsistence farming does not work.
+    manure_kg: float = 0.0
 
     @property
     def area_m2(self) -> int:
@@ -308,7 +316,7 @@ def path_minutes(m: terrain.LocalMap, path: list[tuple[int, int]],
 # --------------------------------------------------------------------------
 
 WORK_TYPES = ("doctor", "firefight", "haul", "cook", "build", "farm", "forage",
-              "chop", "mine", "craft", "water", "rest")
+              "chop", "mine", "craft", "water", "herd", "rest")
 
 
 @dataclass
@@ -323,6 +331,8 @@ class Colony:
     store: items.Store = field(default_factory=items.Store)
     buildings: list[Building] = field(default_factory=list)
     fields: list[Field] = field(default_factory=list)
+    herd: livestock.Herd = field(default_factory=livestock.Herd)
+    society: social.Society = field(default_factory=social.Society)
 
     #: Wild food currently standing within foraging range, in kilocalories.
     forage_stock_kcal: float = -1.0
@@ -338,6 +348,10 @@ class Colony:
     #: prairie colony with no river must haul or dig for it, and in a hard
     #: winter must melt snow, which costs fuel.
     water_l: float = 0.0
+    #: Whether the water on hand was boiled, drawn from a well, or melted --
+    #: any of which makes it safe. Raw surface water is how a colony gets
+    #: dysentery, which is how most settlements actually lost people.
+    water_boiled: bool = True
 
     day: int = 80
     minute_of_day: int = 6 * 60
@@ -377,6 +391,29 @@ class Colony:
     @property
     def beds(self) -> int:
         return sum(b.d.beds for b in self.buildings if b.done)
+
+    @property
+    def winter_fodder_kg(self) -> float:
+        """Hay the herd needs to get through the months it cannot graze.
+
+        The oldest sum in farming and the one that decides how many animals a
+        place can carry. A dairy cow eats twelve kilograms a day, so a
+        four-month winter is roughly a tonne and a half of hay per cow --
+        which at 3.5 person-minutes a kilogram is why a smallholding keeps
+        three cattle and not thirty.
+        """
+        if not self.herd.animals:
+            return 0.0
+        return self.herd.feed_kg_day * self._winter_days() * 0.85
+
+    @property
+    def fodder_capacity_kg_day(self) -> float:
+        """How large a herd the colony's stored fodder can actually carry."""
+        days = max(1.0, self._winter_days() * 0.85)
+        stored = self.store.amount("hay") + self.store.amount("grain") * 0.35
+        # Grass standing on the site feeds them for the rest of the year, so
+        # capacity is set by the pinch point, which is always the winter.
+        return stored / days
 
     @property
     def winter_fuel_mj(self) -> float:
@@ -536,9 +573,17 @@ class Colony:
                 self.note(e)
             if p.dead:
                 self.dead_count += 1
+                # Everyone who cared about them starts grieving now. This is
+                # the only place a death costs the colony anything beyond a
+                # pair of hands.
+                for m in self.society.record_death(p.name, self.alive):
+                    self.note(m)
 
         self._tick_water(minutes)
         self._tick_regrowth(minutes)
+        self._tick_social(minutes, r)
+        self._tick_disease(minutes, r)
+        self._tick_herd(minutes, r)
         self._tick_crops(minutes)
         self._tick_stores(minutes, temp)
         self._burn_fuel(minutes)
@@ -562,6 +607,18 @@ class Colony:
         self.weather = daily_weather(self.survey.clim, self.day, self.seed)
         self.work_today.clear()
         self._regrow_grass()
+        # People get older. Without this a colony founded by six thirty-year-
+        # olds is still six thirty-year-olds in 2090, and the only thing that
+        # ever changes the population is violence.
+        for p in self.alive:
+            p.age += 1.0 / 365.0
+            if p.age < 18.0:
+                # Growing costs calories and puts on mass, which is most of
+                # why a child is expensive for fifteen years.
+                p.height_cm = min(p.adult_height_cm,
+                                  p.height_cm + p.adult_height_cm * 0.0016)
+                p.mass_kg = min(p.adult_mass_kg,
+                                p.mass_kg + p.adult_mass_kg * 0.0018)
         # Rain and snowmelt recharge surface water; frozen ground does not.
         if self.weather.snowing:
             self.weather.snow_cover_mm += self.weather.precip_mm
@@ -577,6 +634,14 @@ class Colony:
                 return
         if p.incapacitated:
             p.job = "rest"
+            return
+        # Anyone properly ill goes to bed. Working through it is not stoicism,
+        # it is spending the rest that the immunity race runs on -- and the
+        # simulation agrees: a colonist kept at work through influenza loses
+        # the race noticeably more often.
+        if any(i.severe for i in p.illnesses):
+            p.job = "rest"
+            self._steer(p, "rest", minutes, r)
             return
         if is_night and p.sleep_debt_h > 3 and not self._emergency():
             p.asleep = True
@@ -731,6 +796,13 @@ class Colony:
                            and o.species.food_kcal > 0)
             if spot:
                 return spot
+        elif job == "herd" and self.herd.alive:
+            b = next((b for b in self.buildings
+                      if b.done and b.d.key in ("byre", "coop")), None)
+            if b:
+                return b.x, b.y
+            a = self.herd.alive[0]
+            return a.x, a.y
 
         # Fall back to milling about near the settlement.
         return (max(1, min(m.size - 2, home + r.randint(-6, 6))),
@@ -803,9 +875,18 @@ class Colony:
             bleeding = sum(1 for q in self.alive
                            if q.bleeding_ml_min > 0 or
                            any(i.tended < 0 for i in q.injuries))
-            if not bleeding:
-                return 0.0
-            return 9.0 * min(1.0, bleeding) * (0.4 + 0.6 * p.skill_factor("medicine"))
+            if bleeding:
+                return 9.0 * min(1.0, bleeding) * (
+                    0.4 + 0.6 * p.skill_factor("medicine"))
+            # Nursing the sick is not as urgent as stopping a haemorrhage but
+            # it decides who lives: fluids and a warm bed shift the immunity
+            # race by about a third, which is most of the difference between
+            # recovering from dysentery and not.
+            sick = sum(1 for q in self.alive if q.ill)
+            if sick:
+                return 4.6 * min(1.0, sick / 2.0) * (
+                    0.5 + 0.5 * p.skill_factor("medicine"))
+            return 0.0
         if job == "cook":
             if "kitchen" not in self.stations:
                 return 0.0
@@ -847,11 +928,28 @@ class Colony:
             # fruit and nobody thought to look.
             worst = max((q.vit_c_debt_days for q in self.alive), default=0.0)
             if worst > 20.0 and not self.store.best_vitamin_c():
-                return 3.2 * min(1.0, worst / 45.0)
+                # Scurvy kills at about 75 days of deficit, so this has to
+                # climb hard enough to outrank whatever else is urgent. Pitched
+                # at 3.2 it lost to haymaking, and a colony with a full barn,
+                # a fat herd and a winter's fodder stacked died to a bounded
+                # rational preference for grass.
+                return 3.0 + 6.0 * min(1.0, worst / 55.0)
             return 0.0
         if job == "chop":
             # Measured against the winter ahead, not against today's weather.
             ready = self.store.fuel_mj() / max(1.0, self.winter_fuel_mj)
+            # Hay is fodder as well as fuel, and the animals do not care that
+            # the stove is full. Leaving this out produced a lovely cascade:
+            # dung solved the heating, so nobody cut a blade of grass, so the
+            # herd starved in February and took the dung with it.
+            fodder = self.winter_fodder_kg
+            if fodder > 0:
+                have = self.store.amount("hay")
+                if have < fodder:
+                    starving = min((a.condition for a in self.herd.alive),
+                                   default=1.0) < 0.5
+                    return 5.6 if starving else max(2.8, 4.2 * (
+                        1.0 - have / fodder))
             if self.survey.timber_m3_ha < 5:
                 # Treeless. Gating this on the survey alone used to return
                 # zero here, so a prairie colony never gathered fuel at all
@@ -885,6 +983,32 @@ class Colony:
             if days < 2.0:
                 return 3.4
             return 0.2 if days > 4.0 else 1.0
+        if job == "herd":
+            if not self.herd.animals:
+                return 0.0
+            # Thin animals are an emergency: condition lost over a hard winter
+            # takes a whole summer to put back, and an animal that dies takes
+            # its milk, its wool and its calves with it.
+            worst = min((a.condition for a in self.herd.alive), default=1.0)
+            if worst < 0.45:
+                return 5.4
+            # A site carries the stock its grass can feed and not one animal
+            # more. When autumn arrives and the hayrick will not cover the
+            # herd, culling is the most urgent work there is -- more urgent
+            # than cutting the hay that was never going to be enough. Ranking
+            # it below routine chores meant the colony stayed busy right up to
+            # the week its entire herd starved.
+            if self._is_culling_season() and len(self.herd.alive) > 2:
+                have = (self.store.amount("hay")
+                        + self.store.amount("grain") * 0.35)
+                if have < self.winter_fodder_kg * 0.75:
+                    return 6.2
+            if self.herd.dung_kg > 40.0:
+                return 2.6
+            if any(a.breed.wool_kg > 0 and a.fleece_days > 320
+                   for a in self.herd.alive):
+                return 2.4
+            return 1.4
         if job == "haul":
             return 0.8
         if job == "rest":
@@ -914,6 +1038,8 @@ class Colony:
             self._work_craft(p, eff)
         elif job == "water":
             self._work_water(p, eff)
+        elif job == "herd":
+            self._work_herd(p, eff, r)
 
     # ---- individual work types ----
 
@@ -944,6 +1070,22 @@ class Colony:
                         self.note(f"{p.name} treated {q.name} ({n} injuries, "
                                   f"quality {quality:.0%})")
 
+        # Then nurse whoever is ill: water, warmth and a bed.
+        beds = self.beds
+        for q in self.alive:
+            if eff < 8.0:
+                break
+            showing = [i for i in q.illnesses if i.showing]
+            if not showing:
+                continue
+            eff -= 8.0
+            care = disease.treatment_quality(
+                p.skill_factor("medicine"), has_med, has_herb,
+                in_bed=beds >= self.population)
+            for i in showing:
+                i.tended = care
+            p.learn("medicine", 8.0)
+
     def _work_build(self, p: Pawn, eff: float) -> None:
         for b in self.buildings:
             if b.done:
@@ -970,8 +1112,15 @@ class Colony:
     HAY_MIN_PER_KG = 3.5
 
     def _work_chop(self, p: Pawn, eff: float, r: rng.Rng) -> None:
-        """Bring in fuel: timber where there is any, hay where there is not."""
+        """Bring in fuel: timber where there is any, hay where there is not.
+
+        And hay regardless of timber when there are animals to feed, because a
+        cow cannot eat an oak.
+        """
         budget = eff * p.skill_factor("construction")
+        if self.store.amount("hay") < self.winter_fodder_kg:
+            self._cut_hay(p, budget)
+            return
         got = 0.0
         for i, obj in list(self.map.objects.items()):
             if budget <= 0:
@@ -1002,6 +1151,9 @@ class Colony:
         # Nothing to fell. On grassland that is not a failed search, it is the
         # site: Iowa is the finest farmland on the planet and has no trees on
         # it at all. Cut hay instead.
+        self._cut_hay(p, budget)
+
+    def _cut_hay(self, p: Pawn, budget: float) -> None:
         hay = 0.0
         for i, obj in list(self.map.objects.items()):
             if budget <= 0:
@@ -1020,7 +1172,104 @@ class Colony:
             obj.growth *= 1.0 - 0.9 * share
         if hay > 0:
             self.store.add("hay", hay)
-            p.learn("construction", eff * 0.3)
+            p.learn("construction", hay * self.HAY_MIN_PER_KG * 0.3)
+
+    def _work_herd(self, p: Pawn, eff: float, r: rng.Rng) -> None:
+        """Tend the animals: dung, fleece, and the decision to kill one.
+
+        The order is a stockman's. Muck out first -- it is the daily job, and
+        on treeless ground it is where the winter's fuel comes from. Shear
+        when there is a fleece to take. Slaughter only when the herd is too
+        big to feed or the colony is genuinely short of food, because eating
+        your breeding stock is how a herd ends.
+        """
+        h = self.herd
+        if not h.animals:
+            return
+        skill = p.skill_factor("farming")
+        eff *= skill
+
+        # Dung goes to fuel on treeless ground and to the fields everywhere
+        # else -- which is the correct priority in both cases, and the reason
+        # cattle are worth more on a prairie than their milk alone suggests.
+        if h.dung_kg > 5.0:
+            share = 0.6 if self.survey.timber_m3_ha < 5 else 0.25
+            fuel_kg = h.dry_dung(eff * share)
+            if fuel_kg > 0:
+                self.store.add("dung", fuel_kg)
+            h.collect_manure(eff * (1.0 - share))
+            eff *= 0.25
+            p.learn("farming", eff)
+
+        if eff > 25.0:
+            wool = h.shear(eff)
+            if wool > 0:
+                self.store.add("fibre", wool)
+                self.note(f"{p.name} sheared {wool:.0f} kg of fleece")
+                p.learn("farming", eff)
+                return
+
+        # Is the herd bigger than the winter's fodder can carry? This is the
+        # oldest decision in animal husbandry and the reason for Martinmas:
+        # you count the hay, you count the mouths, and you kill the difference
+        # in November rather than watch them all starve in February.
+        #
+        # In November specifically. Judging it year-round meant the colony
+        # looked at an empty hayrick in March -- when the grass is about to
+        # come back and the hay is *supposed* to be gone -- and butchered two
+        # of its three cattle on the spot.
+        hungry = self.stats.get("food_days", 99.0) < 20.0
+        if not (hungry or self._is_culling_season()):
+            return
+        have = self.store.amount("hay") + self.store.amount("grain") * 0.35
+        # Butchering is about 45 minutes an animal, so a day's work is a
+        # handful. Culling one per work session was far too slow to close a
+        # gap of half a herd, and the rest starved while the colony got round
+        # to them one at a time.
+        budget = eff
+        while len(h.alive) > 2 and budget >= 45.0:
+            if not (hungry or have < self.winter_fodder_kg * 0.75):
+                break
+            by: dict[str, int] = {}
+            for a in h.alive:
+                by[a.breed.key] = by.get(a.breed.key, 0) + 1
+            # Work down the list rather than giving up on the first species
+            # that will not yield. Taking only the heaviest eater and stopping
+            # when it turned out to be all chicks aborted the entire cull, and
+            # a flock of forty-six hens went into the winter untouched.
+            order = sorted(by, key=lambda k: -by[k]
+                           * livestock.BREEDS[k].feed_kg_day)
+            msg = None
+            for key in order:
+                msg = h.slaughter(key, self.store)
+                if msg:
+                    break
+            if not msg:
+                break
+            self.note(msg)
+            budget -= 45.0
+            hungry = False        # one carcass answers the immediate hunger
+
+    def _is_culling_season(self) -> bool:
+        """The last stretch of grazing before the cold, give or take.
+
+        Found by walking forward from today: if the grass stops within the
+        next six weeks, it is time to count the hay against the mouths.
+        """
+        clim = self.survey.clim
+        if clim.temp_on_day(self.day) < 4.0:
+            return False
+        return any(clim.temp_on_day((self.day + i) % 365) < 4.0
+                   for i in range(1, 43))
+
+    def _winter_days(self) -> float:
+        """How many days ahead are below the grazing threshold.
+
+        Animals graze for free while the grass grows. The number that decides
+        how many of them a colony can keep is how long it cannot.
+        """
+        clim = self.survey.clim
+        return sum(1 for d in range(365) if clim.temp_on_day(d) < 4.0)
 
     def _work_farm(self, p: Pawn, eff: float, r: rng.Rng) -> None:
         skill = p.skill_factor("farming")
@@ -1050,6 +1299,7 @@ class Colony:
                     f.harvested_m2 = 0.0
                     f.harvest_kg = 0.0
                     f.water_deficit_mm = 0.0
+                    f.manure_kg = 0.0
                 return
             if f.crop is None:
                 # Sow, if anything will ripen in the time left this year.
@@ -1060,6 +1310,18 @@ class Colony:
                 if not options:
                     continue
                 crop = options[0][0]
+                # Muck the ground before it goes under the crop. This is the
+                # other half of keeping animals, and the half that pays: a
+                # manured field out-yields an unmanured one by up to a third,
+                # every year, for the cost of carting what the byre produced
+                # anyway.
+                if self.herd.manure_kg > 0:
+                    want = f.area_m2 * livestock.MANURE_KG_PER_M2
+                    spread = min(self.herd.manure_kg, want,
+                                 eff * skill * 12.0)
+                    if spread > 0:
+                        self.herd.manure_kg -= spread
+                        f.manure_kg = spread
                 f.crop = crop
                 f.sown_day = self.day
                 f.gdd = 0.0
@@ -1101,6 +1363,7 @@ class Colony:
             return 0.0
         base = f.crop.kg_per_m2 * f.area_m2
         base *= self.survey.soil.fertility
+        base *= livestock.fertility_bonus(f.manure_kg, f.area_m2)
         base *= 0.35 + 0.65 * f.tended
         if f.water_deficit_mm > 0:
             base *= max(0.1, 1.0 - f.water_deficit_mm / f.crop.water_mm)
@@ -1226,16 +1489,26 @@ class Colony:
         colony in a frozen prairie burns firewood to drink. With neither, it
         is digging seeps, and it is slow.
         """
-        surface = (self.survey.fresh_water > 0.2 and self.weather.temp_c > -4) \
-            or any(b.done and b.d.water_l_day > 0 for b in self.buildings)
+        well = any(b.done and b.d.water_l_day > 0 for b in self.buildings)
+        surface = (self.survey.fresh_water > 0.2
+                   and self.weather.temp_c > -4) or well
+        boiled = False
         if surface:
             got = eff * 2.0
         elif self.weather.snow_cover_mm > 0 or self.weather.temp_c < 0:
             got = eff * 1.3
             if not self._consume_fuel(got * 0.42):
                 got = 0.0
+            boiled = True          # melted snow has already been through a fire
         else:
             got = eff * 0.3
+        # Boiling costs about 0.35 MJ a litre from ambient. Whether it is worth
+        # the fuel is the decision: a colony that skips it is drinking whatever
+        # is upstream of it, which for most of history meant everyone else.
+        if got > 0 and not boiled and not well:
+            if self.store.fuel_mj() > self.winter_fuel_mj * 0.25:
+                boiled = self._consume_fuel(got * 0.35)
+        self.water_boiled = boiled or well
         self.water_l = min(self.water_capacity_l, self.water_l + got)
 
     def _tick_regrowth(self, minutes: float) -> None:
@@ -1248,6 +1521,161 @@ class Colony:
         growth = annual / 365.0 * (0.1 if t < 4 else 1.0) * minutes / MINUTES_PER_DAY
         self.forage_stock_kcal = min(annual * 0.5,
                                      self.forage_stock_kcal + growth)
+
+    #: A colony this short of food has no business having babies, and
+    #: historically did not: fertility collapses under sustained hunger long
+    #: before anyone starves.
+    BIRTH_FOOD_DAYS = 90.0
+
+    def _tick_disease(self, minutes: float, r: rng.Rng) -> None:
+        """Where illness comes from, and how it spreads.
+
+        There is no event deck and nothing random arrives from off-map. Both
+        diseases are consequences of decisions the player is already making --
+        whether to spend fuel boiling water, and whether to build enough
+        shelter before the cold. A colony that does both never sees either.
+        """
+        alive = self.alive
+        if not alive:
+            return
+        days = minutes / MINUTES_PER_DAY
+        beds = max(1, self.beds)
+        pressure = disease.infection_pressure(
+            drinking_raw=not self.water_boiled,
+            crowding=len(alive) / beds,
+            cold=self.weather.temp_c < 2.0,
+            filth=min(1.0, self.herd.dung_kg / 400.0))
+
+        for key, p_day in pressure.items():
+            if r.random() < p_day * days:
+                victim = alive[r.randint(0, len(alive) - 1)]
+                if victim.catch(key):
+                    self.note(f"{victim.name} has fallen ill")
+
+        # Contagion. Living close together is what makes an outbreak an
+        # outbreak, so the same crowding that starts influenza also spreads it.
+        sick = [q for q in alive if q.ill]
+        if not sick:
+            return
+        crowd = min(3.0, len(alive) / beds)
+        for ill_person in sick:
+            for ill in ill_person.illnesses:
+                if not ill.showing:
+                    continue
+                rate = ill.d.contagion * days * (0.5 + 0.5 * crowd)
+                for q in alive:
+                    if q is ill_person:
+                        continue
+                    if r.random() < rate:
+                        q.catch(ill.key)
+
+    def _tick_social(self, minutes: float, r: rng.Rng) -> None:
+        for e in self.society.tick(self.alive, minutes, r):
+            self.note(e)
+        self._maybe_birth(minutes, r)
+
+    def _maybe_birth(self, minutes: float, r: rng.Rng) -> None:
+        """Children, when the colony can afford them.
+
+        A settlement that cannot replace its own dead is on a countdown no
+        amount of good farming fixes, so this matters mechanically and not
+        only as flavour. It is gated on food and on shelter because that is
+        what actually gated it: birth rates track the harvest.
+        """
+        if self.stats.get("food_days", 0.0) < self.BIRTH_FOOD_DAYS:
+            return
+        if self.beds < self.population + 1:
+            return
+        days = minutes / MINUTES_PER_DAY
+        for p in self.alive:
+            if p.male or not (18 <= p.age <= 42) or p.pregnant_days > 0:
+                continue
+            partner = self.society.partner_of(p.name)
+            if not partner:
+                continue
+            if p.morale < 0.45 or p.energy_debt_kcal > 1500:
+                continue
+            # Roughly one conception a year for a healthy, fed, partnered
+            # adult, which is about what an unmanaged population does.
+            if r.random() < days / 365.0:
+                p.pregnant_days = 273.0
+                p.pregnant_by = partner
+
+        for p in self.alive:
+            if p.pregnant_days <= 0:
+                continue
+            p.pregnant_days -= days
+            if p.pregnant_days > 0:
+                continue
+            child = Pawn.random(rng.mix(self.seed, self.day, len(self.pawns)),
+                                age_range=(0.0, 0.0))
+            child.x, child.y = p.x, p.y
+            child.age = 0.0
+            self.pawns.append(child)
+            self.society.record_birth(child.name, (p.name, p.pregnant_by))
+            self.note(f"{p.name} gave birth to {child.name}")
+            p.pregnant_days = 0.0
+            p.pregnant_by = ""
+
+    def _tick_herd(self, minutes: float, r: rng.Rng) -> None:
+        """Feed the animals, take the milk, and let them graze the map down.
+
+        Grazing draws on exactly the same standing grass that hay-cutting
+        does, which is the trade a smallholder is actually making: every
+        kilogram a cow eats in August is a kilogram not in the hayrick in
+        January. Making those two draw on separate pools would have been
+        easier and would have removed the only interesting decision here.
+        """
+        if not self.herd.animals:
+            return
+        sheltered = any(b.done and b.d.insulation > 0 for b in self.buildings)
+        grass = livestock.grass_biomass_kg(self.map)
+        ev, grazed = self.herd.tick(
+            minutes, grass_available_kg=grass, store=self.store,
+            temp_c=self.weather.temp_c, sheltered=sheltered, r=r,
+            fodder_capacity_kg_day=self.fodder_capacity_kg_day)
+        for e in ev:
+            self.note(e)
+        if grazed > 0:
+            livestock.graze_down(self.map, grazed)
+        self.herd.harvest(minutes, self.store)
+        self._drift_animals(minutes, r, sheltered)
+
+    def _drift_animals(self, minutes: float, r: rng.Rng,
+                       sheltered: bool) -> None:
+        """Wander the stock around the pasture, or pen them in the cold.
+
+        Purely presentational, like the colonists walking to work -- but a
+        settlement with a dozen animals scattered over the grass looks like a
+        farm, and a static cluster of dots looks like a spreadsheet.
+        """
+        m = self.map
+        home = m.size // 2
+        pen = next((b for b in self.buildings
+                    if b.done and b.d.key in ("byre", "coop")), None)
+        inside = self.weather.temp_c < 2.0 and pen is not None
+        for a in self.herd.alive:
+            if a.x == 0 and a.y == 0:
+                a.x = max(1, min(m.size - 2, home + r.randint(-10, 10)))
+                a.y = max(1, min(m.size - 2, home + r.randint(-10, 10)))
+                continue
+            if inside:
+                tx, ty = pen.x, pen.y
+            elif r.random() < 0.08:
+                tx = max(1, min(m.size - 2, a.x + r.randint(-14, 14)))
+                ty = max(1, min(m.size - 2, a.y + r.randint(-14, 14)))
+            else:
+                continue
+            steps = max(1, int(minutes / 12))
+            for _ in range(steps):
+                if (a.x, a.y) == (tx, ty):
+                    break
+                nx = a.x + ((tx > a.x) - (tx < a.x))
+                ny = a.y + ((ty > a.y) - (ty < a.y))
+                if m.passable(nx, ny):
+                    a.x, a.y = nx, ny
+                else:
+                    break
 
     def _regrow_grass(self) -> None:
         """Grass cut for fuel comes back, over a season, while it is warm.
@@ -1283,7 +1711,7 @@ class Colony:
         outside is the most expensive possible way to be warm. Planks are last
         for the same reason: sawn lumber is a building, not a fire.
         """
-        for key in ("hay", "wood", "coal", "oil", "charcoal", "plank"):
+        for key in ("dung", "hay", "wood", "coal", "oil", "charcoal", "plank"):
             it = items.ITEMS[key]
             if it.fuel_mj_kg <= 0:
                 continue

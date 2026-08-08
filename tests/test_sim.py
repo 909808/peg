@@ -9,7 +9,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from peg import rng                                      # noqa: E402
 from peg.local import terrain                            # noqa: E402
 from peg.meta import world as world_mod                  # noqa: E402
-from peg.sim import combat, items                        # noqa: E402
+from peg.sim import combat, disease, items                # noqa: E402
+from peg.sim import livestock, social                    # noqa: E402
 from peg.sim.colony import (Colony, daily_weather,       # noqa: E402
                             PERISHABLE_DAYS)
 from peg.sim.pawn import Pawn                            # noqa: E402
@@ -551,3 +552,209 @@ class TestStewards(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestLivestock(unittest.TestCase):
+    """The animal economy, which exists to close three loops at once: fuel on
+    treeless ground, soil fertility, and food that arrives daily."""
+
+    def test_breed_figures_are_real(self):
+        cow = livestock.BREEDS["cow"]
+        # A dairy cow: half a tonne, 12 kg of dry matter a day, 15 L of milk.
+        self.assertAlmostEqual(cow.feed_kg_day / cow.mass_kg, 0.022, delta=0.006)
+        self.assertGreater(cow.milk_l_day, 10.0)
+        hen = livestock.BREEDS["chicken"]
+        self.assertAlmostEqual(hen.eggs_day * 365, 255, delta=50)
+
+    def test_a_cow_eats_a_winter_of_hay(self):
+        """The sum that decides how many animals a place can carry."""
+        h = livestock.Herd()
+        h.add("cow", 1)
+        winter = 130
+        self.assertGreater(h.feed_kg_day * winter, 1200.0,
+                           "a cow through a winter should be over a tonne")
+
+    def test_milk_and_eggs_arrive_daily(self):
+        h = livestock.Herd()
+        h.add("cow", 2)
+        h.add("chicken", 6)
+        st = items.Store()
+        h.harvest(1440, st)
+        self.assertGreater(st.amount("milk"), 10.0)
+        self.assertGreater(st.amount("egg"), 0.1)
+
+    def test_underfed_animals_lose_condition_and_die(self):
+        h = livestock.Herd()
+        h.add("sheep", 3)
+        st = items.Store()
+        r = rng.Rng(1)
+        for _ in range(120):
+            h.tick(1440, grass_available_kg=0.0, store=st, temp_c=-5.0,
+                   sheltered=False, r=r)
+        self.assertEqual(len(h.alive), 0, "sheep fed nothing survived a winter")
+
+    def test_breeding_is_bounded_by_fodder(self):
+        """Eight hens must not become a hundred and then starve together.
+
+        A farmer does not let the flock breed past what the hayrick carries;
+        without that gate the flock exploded every summer and died every
+        winter, which is a thing that happens to nobody who keeps hens.
+        """
+        def run(capacity):
+            h = livestock.Herd()
+            h.add("chicken", 8)
+            st = items.Store()
+            r = rng.Rng(7)
+            for _ in range(400):
+                st.add("hay", 40.0)     # never short of feed, only of judgement
+                h.tick(1440, grass_available_kg=20.0, store=st, temp_c=14.0,
+                       sheltered=True, r=r, fodder_capacity_kg_day=capacity)
+            return len(h.alive)
+
+        bounded = run(2.0)
+        unbounded = run(1e9)
+        self.assertLess(bounded, unbounded * 0.5,
+                        f"gate did nothing: {bounded} vs {unbounded}")
+        self.assertLess(bounded, 45, f"flock ran away to {bounded}")
+
+    def test_manure_lifts_yield_but_not_without_limit(self):
+        area = 1000.0
+        none = livestock.fertility_bonus(0.0, area)
+        some = livestock.fertility_bonus(area * 1.2, area)
+        lots = livestock.fertility_bonus(area * 50.0, area)
+        self.assertEqual(none, 1.0)
+        self.assertGreater(some, 1.05)
+        self.assertLessEqual(lots, livestock.MANURE_CEILING + 1e-9)
+
+    def test_dung_is_fuel_on_treeless_ground(self):
+        self.assertGreater(items.ITEMS["dung"].fuel_mj_kg, 10.0)
+        h = livestock.Herd()
+        h.add("cow", 3)
+        st = items.Store()
+        h.tick(1440, grass_available_kg=999.0, store=st, temp_c=15.0,
+               sheltered=True, r=rng.Rng(3))
+        self.assertGreater(h.dung_kg, 5.0)
+        self.assertGreater(h.dry_dung(600.0), 0.0)
+
+    def test_grazing_and_haymaking_compete(self):
+        """Every kilogram a cow eats in August is a kilogram not in the rick.
+
+        Giving them separate pools was the first draft and removed the only
+        real decision in keeping animals.
+        """
+        c = _colony(people=1)
+        before = livestock.grass_biomass_kg(c.map)
+        self.assertGreater(before, 100.0, "test site has no grass on it")
+        livestock.graze_down(c.map, before * 0.5)
+        after = livestock.grass_biomass_kg(c.map)
+        self.assertLess(after, before * 0.75)
+
+
+class TestSociety(unittest.TestCase):
+    def test_working_together_builds_opinion(self):
+        c = _colony(people=2)
+        a, b = c.alive
+        r = rng.Rng(1)
+        for _ in range(60):
+            c.society.tick(c.alive, 1440, r)
+        op = c.society.opinion(a.name, b.name)
+        self.assertNotEqual(op, 0.0, "two months side by side changed nothing")
+
+    def test_opinion_is_asymmetric_in_principle(self):
+        """Stored per direction, because unrequited regard is a real thing."""
+        s = social.Society()
+        s.bond("A", "B").opinion = 70.0
+        s.bond("B", "A").opinion = -20.0
+        self.assertEqual(s.opinion("A", "B"), 70.0)
+        self.assertEqual(s.opinion("B", "A"), -20.0)
+
+    def test_grief_costs_the_colony_work(self):
+        """A death in November is a slow spring. That is the whole point."""
+        c = _colony(people=3)
+        a, b, d = c.alive
+        for x, y in ((a, d), (b, d)):
+            c.society.bond(x.name, y.name).opinion = 90.0
+            c.society.bond(x.name, y.name).kind = "partner"
+        before = a.work_speed
+        c.society.record_death(d.name, [a, b])
+        c.society._apply_morale([a, b])
+        for _ in range(40):
+            a.tick(60, 18.0, 0.6, False, rng.Rng(2))
+        self.assertLess(a.work_speed, before,
+                        "losing a partner cost the colony nothing")
+
+    def test_children_are_not_small_adults(self):
+        kid = Pawn.random(11, age_range=(1.0, 1.0))
+        adult = Pawn.random(11, age_range=(30.0, 30.0))
+        self.assertLess(kid.height_cm, adult.height_cm * 0.5)
+        self.assertLess(kid.daily_kcal_need(18.0, 0.0),
+                        adult.daily_kcal_need(18.0, 0.0) * 0.6)
+        self.assertEqual(kid.work_speed, 0.0, "a one-year-old was put to work")
+
+
+class TestDisease(unittest.TestCase):
+    def test_illness_comes_from_decisions_not_dice(self):
+        """No event deck: boil the water and build the beds and nobody gets ill."""
+        clean = disease.infection_pressure(drinking_raw=False, crowding=0.9,
+                                           cold=True, filth=0.0)
+        self.assertEqual(clean, {})
+        dirty = disease.infection_pressure(drinking_raw=True, crowding=4.0,
+                                           cold=True, filth=0.5)
+        self.assertIn("enteric", dirty)
+        self.assertIn("influenza", dirty)
+
+    def test_the_immunity_race_favours_the_well_fed(self):
+        fed = disease.Illness("influenza")
+        starved = disease.Illness("influenza")
+        for _ in range(20):
+            fed.tick(0.5, fed=1.0, rested=1.0, warm=1.0)
+            starved.tick(0.5, fed=0.0, rested=0.0, warm=0.0)
+        self.assertGreater(fed.immunity, starved.immunity)
+        self.assertGreater(fed.immunity - fed.severity,
+                           starved.immunity - starved.severity)
+
+    def test_recovery_confers_immunity(self):
+        """Without this an outbreak is a closed loop that empties the colony.
+
+        The first version had none, so whoever recovered first was reinfected
+        by whoever recovered last, for a hundred and fifty days.
+        """
+        p = Pawn.random(5)
+        st = items.Store()
+        st.add("grain", 400.0)
+        st.add("berries", 200.0)
+        r = rng.Rng(1)
+        self.assertTrue(p.catch("influenza"))
+        for _ in range(60):
+            # Fed, watered and warm: the immunity side of the race runs on
+            # exactly those, so a patient left to starve would never recover
+            # and the test would be measuring the wrong thing.
+            p.eat(st, r)
+            p.water_debt_l = 0.0
+            p.tick(1440, 20.0, 0.2, False, r)
+        self.assertFalse(p.ill, "a fed, rested patient never recovered")
+        self.assertFalse(p.catch("influenza"), "reinfected the moment they got up")
+
+    def test_the_starving_do_not_beat_an_infection(self):
+        """The reason illness is worth simulating: it is a bill, not a dice roll."""
+        p = Pawn.random(5)
+        p.catch("influenza")
+        r = rng.Rng(1)
+        for _ in range(60):
+            p.water_debt_l = 0.0
+            p.tick(1440, 20.0, 0.2, False, r)   # nothing to eat
+            if p.dead:
+                break
+        self.assertTrue(p.ill or p.dead,
+                        "shrugged off influenza on an empty stomach")
+
+    def test_untreated_water_makes_a_colony_ill(self):
+        c = _colony(people=6)
+        c.store.add("grain", 400)
+        c.water_l = 400.0
+        c.water_boiled = False
+        r = rng.Rng(4)
+        for _ in range(120):
+            c._tick_disease(1440, r)
+        self.assertTrue(any(p.illnesses for p in c.alive),
+                        "four months on raw water and nobody got sick")

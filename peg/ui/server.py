@@ -118,6 +118,7 @@ class _Handler(BaseHTTPRequestHandler):
             return {
                 "status": viewdata.status(g),
                 "actors": viewdata.actors(g.colony),
+                "animals": viewdata.animals(g.colony),
                 "structures": viewdata.structures(g.colony),
                 "fields": viewdata.fields(g.colony),
             }

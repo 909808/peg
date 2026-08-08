@@ -27,12 +27,14 @@ punctuation, and as five packed bytes per tile it is 184 KiB.
 from __future__ import annotations
 
 import base64
+import math
 import struct
 from dataclasses import dataclass
 
 from .. import geo
 from ..local import terrain
 from ..sim import colony as colony_mod
+from ..sim import pawn as pawn_mod
 
 #: Plane identifiers understood by the client.
 PLANE_XZ = "xz"     # top-down, the ground
@@ -215,8 +217,60 @@ def actors(col: colony_mod.Colony | None) -> list[dict]:
             "job": p.job or "idle",
             "down": p.incapacitated,
             "hurt": bool(p.injuries),
+            # Where they are headed, so the client can face the sprite the way
+            # they are walking. Costs eight bytes a person and is most of what
+            # makes a settlement look alive.
+            "tx": p.target_x, "tz": p.target_y,
             # Standing height in metres, for the cross-section.
             "height_m": round(p.height_cm / 100.0, 2),
+        })
+    return out
+
+
+def animals(col: colony_mod.Colony | None) -> list[dict]:
+    """Livestock on the map.
+
+    Deliberately thin: the kind, where it is, and the two facts you can read
+    off an animal at a glance from across a field -- whether it is grown, and
+    whether it is doing badly.
+    """
+    if col is None or not col.herd.animals:
+        return []
+    return [{
+        "kind": a.breed.key,
+        "x": a.x, "z": a.y,
+        "young": not a.mature,
+        "thin": a.condition < 0.5,
+    } for a in col.herd.alive]
+
+
+def people(col: colony_mod.Colony | None) -> list[dict]:
+    """The roster: who these people are, not just where they are standing.
+
+    A colony is easier to care about when you can see that Kaia is nineteen,
+    is Tomas's daughter, is the best doctor you have and is down with
+    influenza. All of that already exists in the simulation; none of it was
+    reaching the screen.
+    """
+    if col is None:
+        return []
+    out = []
+    for p in col.alive:
+        best = max(p.skills.items(), key=lambda kv: kv[1].level, default=None)
+        out.append({
+            "name": p.name,
+            "age": int(p.age),
+            "child": p.child,
+            "job": p.job or "idle",
+            "morale": round(p.morale, 2),
+            "health": round(p.capacity("consciousness"), 2),
+            "hurt": len(p.injuries),
+            "ill": [i.d.name for i in p.illnesses if i.showing],
+            "pregnant": p.pregnant_days > 0,
+            "traits": [pawn_mod.TRAITS[t].name for t in p.traits
+                       if t in pawn_mod.TRAITS],
+            "best_skill": (f"{best[0]} {best[1].level}") if best else "",
+            "ties": col.society.describe(p.name),
         })
     return out
 
@@ -225,7 +279,10 @@ def structures(col: colony_mod.Colony | None) -> list[dict]:
     if col is None:
         return []
     return [{
-        "name": b.d.name, "x": b.x, "z": b.y,
+        "name": b.d.name, "kind": b.d.key, "x": b.x, "z": b.y,
+        # Footprint is an area in square metres; the client wants a side.
+        "side": max(1, round(math.sqrt(max(1, b.d.footprint)))),
+        "roofed": b.d.insulation > 0 or b.d.beds > 0,
         "done": b.done,
         "progress": 0.0 if b.d.work_min <= 0 else
                     max(0.0, 1.0 - b.work_left / b.d.work_min),
@@ -316,8 +373,13 @@ def status(game) -> dict:
             "morale": round(s.get("morale", 0.0), 3),
             "health": round(s.get("health", 0.0), 3),
             "beds": c.beds,
+            "children": sum(1 for p in c.alive if p.child),
+            "ill": sum(1 for p in c.alive if p.ill),
+            "herd": c.herd.summary(),
+            "water_safe": c.water_boiled,
             "stores": c.store.summary(),
         },
+        "people": people(c),
         "place": place_name(c.survey.lon, c.survey.lat),
         "objectives": objectives(game),
         "over": game.over,

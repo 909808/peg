@@ -99,6 +99,14 @@
   .me td { color:var(--acc); font-weight:700; }
   #intel div, #log div { padding:4px 0; border-bottom:1px solid #232a23;
                          font-size:11px; color:var(--dim); }
+  .pers { padding:6px 0; border-bottom:1px solid #232a23; font-size:12px; }
+  .pers:last-child { border-bottom:0; }
+  .pers .pn { display:flex; gap:6px; align-items:baseline; }
+  .pers .pn b { font-weight:650; }
+  .pers .pn i { margin-left:auto; font-style:normal; color:var(--acc); font-size:11px; }
+  .pers .dim { font-size:11px; }
+  .pers .ties { font-size:10.5px; color:#6f7a63; }
+
   .legend { display:grid; grid-template-columns:repeat(2,1fr); gap:3px 10px; font-size:11px; }
   .legend i { display:inline-block; width:10px; height:10px; border-radius:2px;
               margin-right:6px; vertical-align:-1px; }
@@ -165,6 +173,7 @@
   <div id="side">
     <div class="sec"><h2>What to do next</h2><div id="objectives"></div></div>
     <div class="sec"><h2>Colony</h2><div id="colony"></div></div>
+    <div class="sec"><h2>Your people</h2><div id="people"></div></div>
     <div class="sec" id="tilesec" hidden><h2>Selected tile</h2><div id="tile"></div></div>
     <div class="sec"><h2>This site</h2><div id="site"></div></div>
     <div class="sec"><h2>Rival networks</h2><table id="standings"></table></div>
@@ -196,7 +205,7 @@ const ctx = cv.getContext("2d", { alpha:false });
 const S = {
   plane:"xz", scale:13, camX:0, camZ:0, slice:0,
   legend:null, site:null, status:null,
-  actors:[], structures:[], fields:[],
+  actors:[], animals:[], structures:[], fields:[],
   sel:null, hover:null, busy:false, dirty:true, size:160,
 };
 
@@ -218,6 +227,306 @@ const rgb = a => `rgb(${a[0]},${a[1]},${a[2]})`;
 const shade = (a,f) => `rgb(${clamp(a[0]*f|0,0,255)},${clamp(a[1]*f|0,0,255)},${clamp(a[2]*f|0,0,255)})`;
 const mark = () => { S.dirty = true; };
 
+/* ------------------------------------------------------------- sprites --- */
+/* Hand-drawn pixel art, authored here rather than fetched.
+   Nothing is loaded from a CDN and no image files ship: a sprite is rows of
+   characters indexing a palette, painted once into a cached canvas and then
+   blitted. That keeps the whole game one dependency-free file that works
+   offline, and it means a colonist's coat can be recoloured per person
+   without needing a separate sheet for every combination.
+
+   Lower-case letters are palette slots that callers may override -- s skin,
+   h hair, c coat, p trousers -- which is how eight colonists come out looking
+   like eight different people from one drawing. */
+
+const SPR = {};
+function spr(name, pal, rows) {
+  SPR[name] = { pal, rows, w: rows[0].length, h: rows.length };
+}
+
+const OUT = "#161a14";            // the outline every sprite shares
+
+/* --- people. Four facings, seen from above and slightly behind, so the
+   shoulders read and you can tell which way someone is walking. --- */
+const PPAL = { o: OUT, s: "#d9a374", h: "#3b2a1c", c: "#7d6a4f",
+               p: "#4a4235", b: "#2c261d", e: "#20241c", w: "#efeade" };
+
+spr("man_s", PPAL, [
+  "....oooo....",
+  "..oohhhhoo..",
+  ".ohhhhhhhho.",
+  ".ohhhhhhhho.",
+  ".ohsssssssho",
+  ".osseseesso.",
+  "..osssssso..",
+  ".ocoossooco.",
+  "occcccccccco",
+  "occcccccccco",
+  ".occcccccco.",
+  "..opppppo...",
+  "..opppppo...",
+  "..obo.obo...",
+]);
+spr("man_n", PPAL, [
+  "....oooo....",
+  "..oohhhhoo..",
+  ".ohhhhhhhho.",
+  ".ohhhhhhhho.",
+  ".ohhhhhhhho.",
+  ".ohhhhhhhho.",
+  "..ohhhhhho..",
+  ".ocoohhooco.",
+  "occcccccccco",
+  "occcccccccco",
+  ".occcccccco.",
+  "..opppppo...",
+  "..opppppo...",
+  "..obo.obo...",
+]);
+spr("man_e", PPAL, [
+  "...oooo.....",
+  "..ohhhho....",
+  ".ohhhhhho...",
+  ".ohhhhssoo..",
+  ".ohhsssseo..",
+  ".ohsssssso..",
+  "..ossssso...",
+  "..ocoosso...",
+  ".occccccco..",
+  ".occcccccco.",
+  ".occccccco..",
+  "..opppppo...",
+  "..opppppo...",
+  "...oboobo...",
+]);
+
+/* --- trees. Real canopy shapes, because a conifer and an oak do not look
+   remotely alike from above and the map should say which is which. --- */
+spr("conifer", { o: "#12180f", d: "#1f3a1d", m: "#2c5228", l: "#3d6d33",
+                 t: "#402d1c" }, [
+  "......o.....",
+  ".....odo....",
+  ".....dml....",
+  "....odmml...",
+  "....dmmml...",
+  "...odmmmll..",
+  "...dmmmmll..",
+  "..odmmmmmll.",
+  "..dmmmmmmll.",
+  ".odmmmmmmmll",
+  ".dmmmmmmmmll",
+  "odmmmmmmmmml",
+  "....otto....",
+  "....otto....",
+]);
+spr("broadleaf", { o: "#12180f", d: "#254a1f", m: "#37692c", l: "#4c8c39",
+                   t: "#4a3520" }, [
+  "...oooooo...",
+  "..odmmmmlo..",
+  ".odmmmllllo.",
+  "odmmmmlllllo",
+  "odmmmmmllllo",
+  "odmmmmmmlllo",
+  "odmmmmmmlllo",
+  "odmmmmmmmllo",
+  ".odmmmmmllo.",
+  "..odmmmmlo..",
+  "...oommoo...",
+  "....otto....",
+  "....otto....",
+  "...ooooo....",
+]);
+spr("shrub", { o: "#141a11", d: "#2e4f22", m: "#43703a", l: "#5c9147" }, [
+  "............",
+  "............",
+  "....oooo....",
+  "..oodmmloo..",
+  ".odmmmlllo..",
+  ".odmmmmlllo.",
+  "odmmmmmmlllo",
+  ".odmmmmmllo.",
+  "..oodmmloo..",
+  "....oooo....",
+  "............",
+  "............",
+]);
+spr("palm", { o: "#12180f", d: "#26521f", m: "#3a7a2c", l: "#57a03c",
+              t: "#6b4a29" }, [
+  "..o......o..",
+  ".odm....mdo.",
+  "..odm..mdo..",
+  "o..odmmdo..o",
+  ".o..ollo..o.",
+  "..oomllmoo..",
+  "....ollo....",
+  "....otto....",
+  "....otto....",
+  "....otto....",
+  "....otto....",
+  "...ooooo....",
+]);
+spr("boulder", { o: "#191a1a", d: "#4a4c4a", m: "#65685f", l: "#7e8177" }, [
+  "............",
+  "...oooooo...",
+  "..odmmmllo..",
+  ".odmmmmlllo.",
+  ".odmmmmmllo.",
+  "odmmmmmmlllo",
+  "odmmmmmmmllo",
+  ".odddmmmllo.",
+  "..oddddllo..",
+  "...oooooo...",
+  "............",
+  "............",
+]);
+spr("ore", { o: "#191a1a", d: "#4d4438", m: "#6d6250", l: "#8a7c62",
+             g: "#c08a3e", y: "#e0b93c" }, [
+  "............",
+  "...oooooo...",
+  "..odmgmllo..",
+  ".odmgymmllo.",
+  ".odmgymmllo.",
+  "odmmgymmlllo",
+  "odmmmgyymllo",
+  ".odddmgymlo.",
+  "..oddddllo..",
+  "...oooooo...",
+  "............",
+  "............",
+]);
+
+/* --- animals, top-down. Small, but they have to be tellable apart at a
+   glance, which is the only thing that matters at this size. --- */
+spr("chicken", { o: "#191a14", w: "#e8e4d8", g: "#c9c4b4", r: "#c2452f",
+                 y: "#d9a13a" }, [
+  "............",
+  "............",
+  "....oro.....",
+  "...owwo.....",
+  "..owwwwo....",
+  ".owwwwggo...",
+  ".owwwggggo..",
+  ".owwggggo...",
+  "..ooggoo....",
+  "...oy.yo....",
+  "............",
+  "............",
+]);
+spr("sheep", { o: "#1a1a16", w: "#ece7dc", g: "#cdc7b8", f: "#3a352c" }, [
+  "............",
+  "...oooooo...",
+  "..owwwwwwo..",
+  ".owwwwwwwwo.",
+  "owwwwwwwwffo",
+  "owwwwwwwwffo",
+  ".owwwwwwwfo.",
+  "..ogwwwwgo..",
+  "..o.o..o.o..",
+  "............",
+  "............",
+  "............",
+]);
+spr("goat", { o: "#1a1a16", w: "#cbbba2", g: "#a8967c", f: "#3f382c" }, [
+  "............",
+  "...ooooo.o..",
+  "..owwwwwoo..",
+  ".owwwwwwwfo.",
+  "owwwwwwwffo.",
+  "owwwwwwwfo..",
+  ".ogwwwwwo...",
+  "..ogwwwgo...",
+  "..o.o.o.o...",
+  "............",
+  "............",
+  "............",
+]);
+spr("pig", { o: "#1a1614", w: "#dfa9a0", g: "#c28d86", f: "#9c6f6a" }, [
+  "............",
+  "...oooooo...",
+  "..owwwwwwo..",
+  ".owwwwwwwwo.",
+  "owwwwwwwwffo",
+  "owwwwwwwwffo",
+  ".owwwwwwwfo.",
+  "..ogwwwwgo..",
+  "..o.o..o.o..",
+  "............",
+  "............",
+  "............",
+]);
+spr("cow", { o: "#151512", w: "#e4e0d4", d: "#3a332b", g: "#c3bfb2",
+             p: "#c98f86" }, [
+  "..ooooooo...",
+  ".owwwddwwo..",
+  "owwddwwwwwo.",
+  "owwddwwwwppo",
+  "owwwwwddwppo",
+  "owwwwwddwwpo",
+  "owwddwwwwwo.",
+  ".owwwwwddo..",
+  "..ogwwwwgo..",
+  "..o.o..o.o..",
+  "............",
+  "............",
+]);
+
+/* Paint a sprite into a cached canvas at native pixel size.
+   Cached because a colonist's drawing never changes and re-rasterising 168
+   pixels per person per frame would be silly. `flip` mirrors horizontally,
+   which is why there is no west-facing drawing: it is the east one, backwards,
+   exactly as every 2D game since 1985 has done it. */
+const _sprCache = new Map();
+function sprite(name, subs, flip) {
+  const key = (subs ? name + "|" + Object.values(subs).join(",") : name)
+            + (flip ? "|f" : "");
+  let c = _sprCache.get(key);
+  if (c) return c;
+  const d = SPR[name];
+  if (!d) return null;
+  c = document.createElement("canvas");
+  c.width = d.w; c.height = d.h;
+  const g = c.getContext("2d");
+  const pal = subs ? Object.assign({}, d.pal, subs) : d.pal;
+  for (let y = 0; y < d.h; y++) {
+    const row = d.rows[y];
+    for (let x = 0; x < row.length; x++) {
+      const ch = row[x];
+      if (ch === "." || ch === " ") continue;
+      const col = pal[ch];
+      if (!col) continue;
+      g.fillStyle = col;
+      g.fillRect(flip ? d.w - 1 - x : x, y, 1, 1);
+    }
+  }
+  _sprCache.set(key, c);
+  return c;
+}
+
+/* Which drawing an object gets. Species names come from the simulation, so a
+   spruce really is drawn as a spire and an oak as a broad crown. */
+function treeSprite(species, height) {
+  if (/palm|kapok|mangrove/.test(species)) return "palm";
+  if (/pine|spruce|fir|conifer|juniper/.test(species)) return "conifer";
+  if (height != null && height < 3.5) return "shrub";
+  return "broadleaf";
+}
+
+/* Deterministic per-pawn colouring, so a given colonist always looks the
+   same and you can recognise them across the map without reading a label. */
+const SKINS = ["#f0c9a2","#e0ac7e","#d9a374","#b97f52","#8d5a35","#6b4326"];
+const HAIRS = ["#2a1d13","#3b2a1c","#5b3a1e","#8a5a2b","#b58b4c","#d8cfc0",
+               "#7a2f1c","#1b1b1b"];
+const COATS = ["#7d6a4f","#5e6b52","#6b5560","#4f6470","#7a5a3c","#59604a",
+               "#7b4a4a","#464f5c"];
+function pawnLook(a) {
+  let n = 0;
+  for (let i = 0; i < a.name.length; i++) n = (n * 31 + a.name.charCodeAt(i)) | 0;
+  n = n < 0 ? -n : n;
+  return { s: SKINS[n % SKINS.length],
+           h: HAIRS[(n >> 3) % HAIRS.length],
+           c: COATS[(n >> 7) % COATS.length] };
+}
+
 /* ---------------------------------------------------------------- data --- */
 
 async function loadSite() {
@@ -233,28 +542,101 @@ async function loadSite() {
 
 async function loadStatus() {
   const d = await api("/api/status");
-  S.status = d.status; S.actors = d.actors;
+  S.status = d.status; S.actors = d.actors; S.animals = d.animals || [];
   S.structures = d.structures; S.fields = d.fields;
   paint(); mark();
 }
 
-/* Bake terrain + hillshade + object tint into one image at 1 px per tile.
-   Everything after this is a single scaled blit. */
+/* Ground texture.
+
+   A tile used to be one flat pixel, which at forty pixels a tile is forty
+   pixels of exactly the same brown -- the map read as a spreadsheet with a
+   colour scheme. Each tile is now baked at BAKE_PX subpixels a side with a
+   surface pattern that belongs to its material: grass gets tufts, gravel gets
+   angular chips, sand gets fine grain, water gets ripple bands running with
+   the shore. It is still one image and still one blit, so it costs memory
+   (a 160 m site is 960 x 960) and nothing per frame.
+
+   The patterns are deterministic functions of world position, like everything
+   else here, so the ground does not shimmer when you pan. */
+const BAKE_PX = 6;
+
+/* A cheap 2D hash in [0,1). The same trick the terrain generator uses, so
+   the texture is stable and cannot disagree with itself between bakes. */
+function h2(x, y) {
+  let n = (x * 73856093) ^ (y * 19349663);
+  n = (n ^ (n >>> 13)) * 1274126177;
+  return ((n ^ (n >>> 16)) >>> 0) / 4294967296;
+}
+
+/* How a material looks up close: returns a brightness multiplier for one
+   subpixel. Kept as arithmetic rather than image data so there is nothing to
+   load and nothing to go missing from the bundle. */
+function grain(kind, gx, gy, r) {
+  switch (kind) {
+    case "grass": {                       // tufts, standing more or less up
+      const blade = h2(gx, (gy / 2) | 0);
+      return 0.86 + 0.30 * blade + (r < 0.10 ? 0.14 : 0);
+    }
+    case "rich_soil":
+    case "soil":
+    case "mud":
+    case "packed": {                      // clods, with the odd stone in it
+      const clod = h2((gx / 2) | 0, (gy / 2) | 0);
+      return 0.84 + 0.26 * clod + (r > 0.94 ? 0.18 : 0);
+    }
+    case "sand":
+      return 0.94 + 0.12 * r;             // fine, so almost flat
+    case "gravel":
+    case "scree":
+    case "road": {                        // angular chips with lit faces
+      const chip = h2((gx / 2) | 0, (gy / 2) | 0);
+      return 0.78 + 0.44 * chip;
+    }
+    case "rock":
+    case "cliff": {
+      const face = h2((gx / 3) | 0, (gy / 3) | 0);
+      return 0.74 + 0.50 * face;
+    }
+    case "snow":
+    case "ice":
+      return 0.96 + 0.09 * r;
+    case "marsh":
+      return 0.88 + 0.24 * h2(gx, (gy / 3) | 0);
+    case "deep_water":
+    case "water":
+    case "shallows": {                    // ripple bands
+      const band = Math.sin(gy * 0.9 + gx * 0.35) * 0.5 + 0.5;
+      return 0.90 + 0.16 * band + 0.06 * r;
+    }
+    case "concrete":
+      return 0.96 + 0.07 * r;
+    case "floor": {                       // board joints
+      return (gy % 3 === 0) ? 0.82 : 0.98 + 0.04 * r;
+    }
+    default:
+      return 0.92 + 0.16 * r;
+  }
+}
+
 function bake() {
-  const v = S.site, n = v.size;
+  const v = S.site, n = v.size, B = BAKE_PX, N = n * B;
   baked = document.createElement("canvas");
-  baked.width = n; baked.height = n;
+  baked.width = N; baked.height = N;
   bakedCtx = baked.getContext("2d");
-  const img = bakedCtx.createImageData(n, n);
+  const img = bakedCtx.createImageData(N, N);
   const px = img.data;
-  const terrRGB = S.legend.terrain_order.map(k => S.legend.terrain[k].rgb);
+  const order = S.legend.terrain_order;
+  const terrRGB = order.map(k => S.legend.terrain[k].rgb);
   const objRGB = {};
   for (const k in S.legend.objects) objRGB[k] = S.legend.objects[k].rgb;
 
   for (let j = 0; j < n; j++) {
     for (let i = 0; i < n; i++) {
       const k = j * n + i;
-      let c = terrRGB[v.terrainA[k]];
+      const tid = v.terrainA[k];
+      const kind = order[tid];
+      let c = terrRGB[tid];
 
       // Hillshade: relief is invisible on flat colour, and this is a game
       // where a six-degree slope decides where the water goes.
@@ -263,26 +645,35 @@ function bake() {
         const dx = v.yA[k] - v.yA[k-1], dz = v.yA[k] - v.yA[k-n];
         f = clamp(1 + (dx * 0.9 + dz * 0.9) / 240, 0.58, 1.42);
       }
-      // A little deterministic grain so a hectare of soil is not a flat fill.
-      const nz = ((i * 73856093) ^ (j * 19349663)) & 255;
-      f *= 0.95 + nz / 255 * 0.10;
+      // Coarse patchiness on top of the fine grain. Per-subpixel noise alone
+      // averages out to a flat wash at any distance -- real ground varies at
+      // the scale of a few metres as well as a few centimetres, and it is the
+      // larger scale the eye actually reads as "ground".
+      f *= 0.90 + 0.20 * (h2((i / 3) | 0, (j / 3) | 0) * 0.6
+                          + h2((i / 9) | 0, (j / 9) | 0) * 0.4);
 
       const o = v.objA[k];
       if (o) {
         const oc = objRGB[o] || [120,120,120];
         // Blend the object into the base so the zoomed-out map still reads
-        // as forest / rock / built-up without drawing a single shape.
-        // Soft enough that the baked square does not fight the drawn shape
-        // at high zoom, strong enough that woodland still reads as woodland
-        // when zoomed out past the detail threshold.
-        const w = (o === 1 || o === 6) ? 0.55 : (o === 2 ? 0.30 : 0.80);
+        // as forest / rock / built-up without drawing a single shape, and
+        // softly enough that it does not fight the sprite drawn over it.
+        const w = (o === 1 || o === 6) ? 0.42 : (o === 2 ? 0.22 : 0.70);
         c = [c[0]*(1-w)+oc[0]*w, c[1]*(1-w)+oc[1]*w, c[2]*(1-w)+oc[2]*w];
       }
-      const p = k * 4;
-      px[p]   = clamp(c[0]*f, 0, 255);
-      px[p+1] = clamp(c[1]*f, 0, 255);
-      px[p+2] = clamp(c[2]*f, 0, 255);
-      px[p+3] = 255;
+
+      for (let sy = 0; sy < B; sy++) {
+        const gy = j * B + sy;
+        let p = (gy * N + i * B) * 4;
+        for (let sx = 0; sx < B; sx++, p += 4) {
+          const gx = i * B + sx;
+          const g = f * grain(kind, gx, gy, h2(gx, gy));
+          px[p]   = clamp(c[0]*g, 0, 255);
+          px[p+1] = clamp(c[1]*g, 0, 255);
+          px[p+2] = clamp(c[2]*g, 0, 255);
+          px[p+3] = 255;
+        }
+      }
     }
   }
   bakedCtx.putImageData(img, 0, 0);
@@ -342,8 +733,13 @@ function drawTop() {
   // that the object tint baked into the image already reads as forest or rock,
   // and drawing three thousand separate arcs per frame does not.
   if (s >= 8) drawObjectLayer(R, s);
-  if (s >= 14) drawGrid(R, s);
+  // The metre grid is a measuring aid, not decoration. Once the ground has a
+  // texture of its own a grid at every tile just makes it look like a
+  // spreadsheet again, so it comes in later and much fainter.
+  if (s >= 26) drawGrid(R, s);
   drawFields(s);
+  drawBuildings(s);
+  drawAnimals(s);
   drawActors(s);
   if (S.sel) {
     ctx.strokeStyle = "#e0b93c"; ctx.lineWidth = 2;
@@ -351,9 +747,18 @@ function drawTop() {
   }
 }
 
-/* One path per object class, filled once. Issuing a beginPath/fill per tree
-   was costing about 9 ms a frame in woodland; batching makes it under one. */
+/* The object layer, in two modes.
+
+   Above SPRITE_ZOOM every tree, rock and seam is a drawn sprite, which is
+   what makes the map look like a place rather than a scatter plot. Below it
+   they go back to one batched path per class: at eight pixels a tile a sprite
+   is illegible anyway, and there can be twenty thousand of them on screen. */
+const SPRITE_ZOOM = 11;
+const OBJ_SPRITE = { 1: "broadleaf", 2: "shrub", 3: "boulder", 4: "ore",
+                     6: "conifer" };
+
 function drawObjectLayer(R, s) {
+  if (s >= SPRITE_ZOOM) { drawObjectSprites(R, s); return; }
   const v = S.site;
   const buckets = new Map();
   for (let z = R.z0; z < R.z1; z++) {
@@ -392,6 +797,34 @@ function drawObjectLayer(R, s) {
   }
 }
 
+function drawObjectSprites(R, s) {
+  const v = S.site;
+  ctx.imageSmoothingEnabled = false;
+  // Back to front, so a tree in front overlaps the one behind it and the
+  // canopy reads as depth rather than as a grid of stamps.
+  for (let z = R.z0; z < R.z1; z++) {
+    const row = z * v.size;
+    for (let x = R.x0; x < R.x1; x++) {
+      const code = v.objA[row + x];
+      if (!code || code === 5) continue;         // buildings draw themselves
+      const name = OBJ_SPRITE[code];
+      if (!name) continue;
+      const img = sprite(name);
+      if (!img) continue;
+      // Trees are drawn taller than their tile, anchored at the trunk, so a
+      // 22 m oak towers over a 2 m bush the way it should.
+      const h = v.objhA[row + x] / 10;
+      const grow = (code === 1 || code === 6)
+        ? clamp(0.9 + h / 26, 0.9, 2.1)
+        : (code === 2 ? 0.85 : 0.95);
+      const w = s * grow, ht = w * img.height / img.width;
+      const px = (x - S.camX) * s + s / 2 - w / 2;
+      const py = (z - S.camZ) * s + s - ht;
+      ctx.drawImage(img, px, py, w, ht);
+    }
+  }
+}
+
 function drawObjTop(px, py, s, code, h) {
   const c = px + s/2, m = py + s/2;
   ctx.fillStyle = rgb(S.legend.objects[code].rgb);
@@ -414,7 +847,7 @@ function drawObjTop(px, py, s, code, h) {
 }
 
 function drawGrid(R, s) {
-  ctx.strokeStyle = "rgba(0,0,0,.18)"; ctx.lineWidth = 1;
+  ctx.strokeStyle = "rgba(0,0,0,.10)"; ctx.lineWidth = 1;
   ctx.beginPath();
   for (let x = R.x0; x <= R.x1; x++) {
     const p = Math.round((x - S.camX) * s) + .5;
@@ -447,22 +880,123 @@ function drawFields(s) {
   }
 }
 
+/* Buildings, drawn rather than sprited because their footprints differ and a
+   fixed drawing would either stretch or tile badly. A roof plane, a ridge, a
+   door and a shadow is enough to read as a building at any size, and it lets
+   an unfinished one show its frame. */
+const ROOFS = {
+  cabin:["#7a4f31","#8f5e3a"], longhouse:["#7a4f31","#8f5e3a"],
+  shelter:["#5d5636","#6d6540"], byre:["#6b4a2e","#7d5837"],
+  coop:["#6b4a2e","#7d5837"], granary:["#8a6a3c","#9d7a46"],
+  cold_store:["#4f5a5e","#5d6a6e"], workshop:["#6a5940","#7b684b"],
+  machine_shop:["#4f5551","#5d635e"], watchtower:["#6a5940","#7b684b"],
+  windmill:["#7a6a4a","#8c7a56"], hearth:["#54514a","#6a655c"],
+  kitchen:["#6f5b42","#81694c"], well:["#4d5560","#5b6470"],
+  cistern:["#4d5560","#5b6470"], kiln:["#5e5148","#6f5f54"],
+  smelter:["#554943","#655750"], sawpit:["#6a5940","#7b684b"],
+  palisade:["#5c4a33","#6c583d"], generator:["#4f5551","#5d635e"],
+};
+function drawBuildings(s) {
+  if (!S.structures) return;
+  for (const b of S.structures) {
+    const side = b.side || 1;
+    const px = (b.x - S.camX) * s, pz = (b.z - S.camZ) * s;
+    const w = side * s;
+    if (px + w < -20 || pz + w < -20 || px > cv.width + 20 || pz > cv.height + 20)
+      continue;
+    const pal = ROOFS[b.kind] || ["#6a5940", "#7b684b"];
+    if (!b.done) {
+      // A frame with nothing on it yet, and a progress bar, because "what is
+      // being built and how far along" is a question you ask constantly.
+      ctx.strokeStyle = "#8d967f"; ctx.lineWidth = Math.max(1, s * 0.08);
+      ctx.setLineDash([s * 0.35, s * 0.25]);
+      ctx.strokeRect(px + 1, pz + 1, w - 2, w - 2);
+      ctx.setLineDash([]);
+      ctx.fillStyle = "rgba(224,185,60,.75)";
+      ctx.fillRect(px + 2, pz + w - 5, (w - 4) * b.progress, 3);
+      continue;
+    }
+    ctx.fillStyle = "rgba(0,0,0,.30)";
+    ctx.fillRect(px + s * 0.18, pz + s * 0.22, w, w);
+    ctx.fillStyle = pal[0];
+    ctx.fillRect(px, pz, w, w);
+    // Roof planes: a lit slope and a shaded one, meeting at a ridge.
+    ctx.fillStyle = pal[1];
+    ctx.beginPath();
+    ctx.moveTo(px, pz); ctx.lineTo(px + w, pz);
+    ctx.lineTo(px + w * 0.5, pz + w * 0.5); ctx.closePath(); ctx.fill();
+    if (b.roofed) {
+      ctx.strokeStyle = "rgba(0,0,0,.45)";
+      ctx.lineWidth = Math.max(1, s * 0.06);
+      ctx.beginPath();
+      ctx.moveTo(px + w * 0.5, pz + w * 0.5);
+      ctx.lineTo(px + w * 0.5, pz + w);
+      ctx.moveTo(px, pz); ctx.lineTo(px + w * 0.5, pz + w * 0.5);
+      ctx.lineTo(px + w, pz); ctx.stroke();
+    }
+    ctx.strokeStyle = "rgba(0,0,0,.55)"; ctx.lineWidth = 1;
+    ctx.strokeRect(px + .5, pz + .5, w - 1, w - 1);
+    if (s >= 10 && b.roofed) {                       // a door on the south face
+      ctx.fillStyle = "#2a2119";
+      ctx.fillRect(px + w * 0.42, pz + w - Math.max(2, s * 0.28),
+                   Math.max(2, w * 0.16), Math.max(2, s * 0.28));
+    }
+  }
+}
+
+/* Animals next, so a colonist standing in the byre is drawn in front of the
+   cow rather than behind it. */
+function drawAnimals(s) {
+  if (!S.animals || !S.animals.length) return;
+  ctx.imageSmoothingEnabled = false;
+  for (const a of S.animals) {
+    const px = (a.x - S.camX) * s, pz = (a.z - S.camZ) * s;
+    if (px < -40 || pz < -40 || px > cv.width + 40 || pz > cv.height + 40) continue;
+    const img = sprite(SPR[a.kind] ? a.kind : "sheep");
+    if (!img) continue;
+    // Young stock is visibly smaller, which is most of what you want to know
+    // when you glance at a herd.
+    // Roughly to scale against a colonist: a cow is a couple of metres of
+    // animal, a hen is a bird.
+    const g = (a.young ? 0.62 : 1.0) * (a.kind === "cow" ? 1.25 :
+              a.kind === "chicken" ? 0.55 :
+              a.kind === "pig" ? 0.95 : 0.85);
+    const w = s * g, h = w * img.height / img.width;
+    ctx.globalAlpha = a.thin ? 0.75 : 1;
+    ctx.drawImage(img, px + s/2 - w/2, pz + s - h, w, h);
+    ctx.globalAlpha = 1;
+  }
+}
+
 function drawActors(s) {
   const r = Math.max(3.2, s * 0.44);
+  ctx.imageSmoothingEnabled = false;
   for (const a of S.actors) {
     const x = (a.x - S.camX) * s + s/2, z = (a.z - S.camZ) * s + s/2;
     if (x < -30 || z < -30 || x > cv.width + 30 || z > cv.height + 30) continue;
-    ctx.beginPath(); ctx.arc(x, z + r*0.55, r*0.85, 0, 6.284);
-    ctx.fillStyle = "rgba(0,0,0,.35)"; ctx.fill();
-    ctx.beginPath(); ctx.arc(x, z, r, 0, 6.284);
-    ctx.fillStyle = a.down ? "#d15f45" : (a.hurt ? "#e2a04d" : "#f4f7ea");
-    ctx.fill();
-    ctx.lineWidth = 1.5; ctx.strokeStyle = "#10140f"; ctx.stroke();
-    if (s >= 9) {
-      ctx.font = `700 ${Math.max(9, r*1.05)}px system-ui,sans-serif`;
-      ctx.fillStyle = "#10140f"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-      ctx.fillText(a.initial, x, z + .5);
-      ctx.textAlign = "start"; ctx.textBaseline = "alphabetic";
+    ctx.beginPath(); ctx.ellipse(x, z + r*0.62, r*0.8, r*0.42, 0, 0, 6.284);
+    ctx.fillStyle = "rgba(0,0,0,.3)"; ctx.fill();
+
+    // Which way are they walking? Facing is the cheapest possible animation
+    // and it does an enormous amount of work: a settlement where everyone is
+    // turned towards what they are doing reads as busy.
+    const dx = (a.tx == null ? a.x : a.tx) - a.x;
+    const dz = (a.tz == null ? a.z : a.tz) - a.z;
+    let name = "man_s", flip = false;
+    if (Math.abs(dx) > Math.abs(dz)) { name = "man_e"; flip = dx < 0; }
+    else if (dz < 0) name = "man_n";
+
+    const look = pawnLook(a);
+    if (a.down) { look.c = "#8a3f31"; look.s = "#b48a6a"; }
+    else if (a.hurt) look.c = "#9a6a3a";
+    const img = sprite(name, look, flip);
+    const w = Math.max(9, s * 0.92), h = w * img.height / img.width;
+    ctx.drawImage(img, x - w/2, z - h * 0.62, w, h);
+
+    if (a.down) {                          // a downed colonist needs to shout
+      ctx.fillStyle = "#d15f45";
+      ctx.beginPath(); ctx.arc(x, z - h*0.72, Math.max(2, s*0.12), 0, 6.284);
+      ctx.fill();
     }
     // Only the person under the cursor is labelled. Labelling all of them
     // turns a working settlement into an unreadable stack of overlapping
@@ -651,8 +1185,32 @@ function paint() {
     stat("fuel", `${c.fuel_days} days`, c.fuel_days/120) +
     stat("water", `${c.water_days} days`, c.water_days/5) +
     stat("morale", `${(c.morale*100)|0}%`, c.morale) +
-    row("beds", `${c.beds} / ${c.population}`) +
+    row("beds", `${c.beds} / ${c.population}`
+        + (c.beds < c.population
+           ? ` <span style="color:var(--bad)">crowded</span>` : "")) +
+    (c.children ? row("children", c.children) : "") +
+    (c.ill ? row("ill", `<span style="color:var(--bad)">${c.ill}</span>`) : "") +
+    row("water", c.water_safe ? "boiled" :
+        `<span style="color:var(--hot)">untreated</span>`) +
+    row("livestock", esc(c.herd)) +
     `<div class="dim" style="margin-top:8px;font-size:11.5px">${esc(c.stores)}</div>`;
+
+  // The roster. A colony is easier to care about when you can see that Kaia
+  // is nineteen, is Tomas's daughter, is your best doctor, and has influenza.
+  document.getElementById("people").innerHTML = (st.people || []).map(p => {
+    const flags = [];
+    if (p.ill.length) flags.push(`<span style="color:var(--bad)">${esc(p.ill.join(", "))}</span>`);
+    if (p.hurt) flags.push(`<span style="color:var(--hot)">${p.hurt} injured</span>`);
+    if (p.pregnant) flags.push(`<span style="color:var(--blue)">expecting</span>`);
+    const sub = [p.child ? "child" : p.best_skill, p.traits.slice(0,2).join(", ")]
+      .filter(Boolean).join(" · ");
+    return `<div class="pers" title="${esc(p.ties.join("; ") || "no strong ties")}">
+      <div class="pn"><b>${esc(p.name)}</b> <span class="dim">${p.age}</span>
+        <i>${esc(p.job)}</i></div>
+      <div class="dim">${esc(sub)}${flags.length ? " · " + flags.join(" · ") : ""}</div>
+      ${p.ties.length ? `<div class="ties">${esc(p.ties[0])}</div>` : ""}
+    </div>`;
+  }).join("");
 
   document.getElementById("site").innerHTML =
     row("soil", s.soil) + row("climate", s.koppen) +

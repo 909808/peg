@@ -66,6 +66,23 @@ ITEMS: dict[str, ItemDef] = {d.key: d for d in (
        shelf_days=2, value=1.8, tags=("food", "raw")),
     _d("fat", "rendered fat", 1.0, kcal_kg=8800, shelf_days=400, fuel_mj_kg=37,
        value=3.0, tags=("food", "raw")),
+    # Milk and eggs are the only foods on a temperate farm that arrive every
+    # single day rather than once in autumn, and they carry what stored grain
+    # does not. Whole milk is 640 kcal/L and holds about 10 mg of vitamin C;
+    # it also goes off in two days without a cold store, which is why every
+    # dairying culture on Earth independently invented cheese.
+    # Everything is kilograms, including these: a litre of milk is 1.03 kg and
+    # an egg is 60 g, and the moment a unit stops being a kilogram the
+    # nutrition arithmetic quietly doubles. That bug has been in this file
+    # once already.
+    _d("milk", "milk", 1.0, kcal_kg=620, protein_g_kg=33, vit_c_mg_kg=10,
+       shelf_days=2, value=1.4, tags=("food", "raw")),
+    _d("cheese", "cheese", 1.0, kcal_kg=4000, protein_g_kg=250, shelf_days=240,
+       value=6.0, tags=("food", "cooked")),
+    _d("butter", "butter", 1.0, kcal_kg=7200, protein_g_kg=9, shelf_days=60,
+       fuel_mj_kg=33, value=7.0, tags=("food", "cooked")),
+    _d("egg", "eggs", 1.0, kcal_kg=1430, protein_g_kg=126, vit_c_mg_kg=0,
+       shelf_days=28, value=2.0, tags=("food", "raw")),
     # ---- prepared -------------------------------------------------------
     # These weigh a kilogram per unit like everything else. They used to be
     # 0.6 and 0.5, which quietly broke the books: stack amounts are in units
@@ -84,6 +101,11 @@ ITEMS: dict[str, ItemDef] = {d.key: d for d in (
     # settlers heated sod houses by twisting hay into hard "cats" for hours a
     # day. Without it the best farmland on the planet is a death sentence.
     _d("hay", "twisted hay", 1.0, fuel_mj_kg=14.5, value=0.1, tags=("fuel",)),
+    # Dried dung, at 13 MJ/kg. It is the historical answer to heating a
+    # treeless landscape, it costs a third of the labour of twisting hay, and
+    # it is the reason cattle are worth more on a prairie than their milk
+    # alone would suggest.
+    _d("dung", "dried dung", 1.0, fuel_mj_kg=13.0, value=0.1, tags=("fuel",)),
     _d("plank", "planks", 1.0, fuel_mj_kg=16, value=1.0, tags=("build", "fuel")),
     _d("stone", "stone block", 1.0, value=0.5, tags=("build",)),
     _d("clay", "clay", 1.0, value=0.3, tags=("build",)),
@@ -435,6 +457,15 @@ RECIPES: dict[str, Recipe] = {r.key: r for r in (
     # real practice -- Andean chuno is exactly this.
     Recipe("dry_potato", "dry roots", (("potato", 4.3),),
            (("preserved", 1.0),), 26, "cooking", "kitchen"),
+    # Milk keeps two days; cheese keeps eight months. Every dairying culture
+    # on Earth worked this out independently, and a colony with a cow and no
+    # cheese press is throwing away most of what she gives. Ten litres to the
+    # kilogram is the real ratio for a hard cheese, and it conserves calories
+    # almost exactly -- the whey carries off the rest.
+    Recipe("make_cheese", "press cheese", (("milk", 7.0), ("salt", 0.02)),
+           (("cheese", 1.0),), 34, "cooking", "kitchen"),
+    Recipe("churn_butter", "churn butter", (("milk", 12.0),),
+           (("butter", 1.0),), 26, "cooking", "kitchen"),
     Recipe("saw_planks", "saw planks", (("wood", 1.4),), (("plank", 1.0),),
            9, "crafting", "sawpit"),
     Recipe("burn_charcoal", "burn charcoal", (("wood", 5.0),),
