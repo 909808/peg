@@ -1617,6 +1617,21 @@ class Colony:
                                 age_range=(0.0, 0.0))
             child.x, child.y = p.x, p.y
             child.age = 0.0
+            # Children take a parent's surname, so that three generations on
+            # you can still read a family off the roster. A newborn with a
+            # surname belonging to nobody in the colony is just noise.
+            other = p.pregnant_by.split()[-1] if p.pregnant_by else ""
+            surname = other if (other and r.chance(0.5)) else p.name.split()[-1]
+            given = child.name.split()[0]
+            # Relationships are keyed by name, so two people called the same
+            # thing would share one set of bonds and one grave.
+            taken = {q.name for q in self.pawns}
+            name = f"{given} {surname}"
+            n = 2
+            while name in taken:
+                name = f"{given} {surname} the {n}{'nd' if n == 2 else 'rd' if n == 3 else 'th'}"
+                n += 1
+            child.name = name
             self.pawns.append(child)
             self.society.record_birth(child.name, (p.name, p.pregnant_by))
             self.note(f"{p.name} gave birth to {child.name}")

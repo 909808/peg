@@ -170,15 +170,33 @@ TRAITS: dict[str, Trait] = {t.key: t for t in (
 )}
 
 
-FIRST_NAMES = (
-    "Adaeze", "Ama", "Anouk", "Beatriz", "Chen", "Dalia", "Ekaterina", "Elif",
-    "Fatima", "Gita", "Hana", "Ines", "Jarrah", "Kaia", "Lena", "Mira",
+# Split by the sex the simulation records, because it draws one and then the
+# other independently: with a single mixed pool the log cheerfully reported
+# that Tomas Garang had given birth. A handful of these read either way in
+# some places, which is fine -- the point is only that the roster does not
+# contradict itself.
+FEMALE_NAMES = (
+    "Adaeze", "Ama", "Anouk", "Beatriz", "Dalia", "Ekaterina", "Elif",
+    "Fatima", "Gita", "Hana", "Ines", "Kaia", "Lena", "Mira",
     "Noor", "Oksana", "Priya", "Rania", "Sena", "Tamsin", "Uma", "Vera",
-    "Wren", "Yara", "Zofia", "Ade", "Bashir", "Caleb", "Dmitri", "Eitan",
-    "Faisal", "Gunnar", "Hiro", "Ivan", "Joaquin", "Kwame", "Lars", "Mateo",
-    "Nils", "Omar", "Pavel", "Quan", "Rafael", "Soren", "Tomas", "Ugo",
-    "Viktor", "Wei", "Xu", "Yusuf", "Zane",
+    "Yara", "Zofia", "Amara", "Ilse", "Nadia", "Rosa", "Tove", "Leila",
 )
+MALE_NAMES = (
+    "Ade", "Bashir", "Caleb", "Dmitri", "Eitan", "Faisal", "Gunnar", "Hiro",
+    "Ivan", "Joaquin", "Kwame", "Lars", "Mateo", "Nils", "Omar", "Pavel",
+    "Quan", "Rafael", "Soren", "Tomas", "Ugo", "Viktor", "Wei", "Yusuf",
+    "Zane", "Emeka", "Janos", "Marek", "Ravi", "Tobias",
+)
+#: Names the generator does not assign a sex to either way.
+NEUTRAL_NAMES = ("Chen", "Jarrah", "Wren", "Xu", "Rowan", "Sasha")
+
+FIRST_NAMES = FEMALE_NAMES + MALE_NAMES + NEUTRAL_NAMES
+
+
+def given_names(male: bool, rand) -> tuple[str, ...]:
+    """The pool to draw a given name from, including the unisex ones."""
+    base = MALE_NAMES if male else FEMALE_NAMES
+    return base + NEUTRAL_NAMES if rand.chance(0.12) else base
 SURNAMES = (
     "Abara", "Almeida", "Beaumont", "Castellan", "Dvorak", "Eriksen",
     "Fontaine", "Garang", "Haddad", "Ibarra", "Jansen", "Kovac", "Lindqvist",
@@ -302,7 +320,7 @@ class Pawn:
             bmi *= 0.72 + 0.28 * (age / 18.0)
         mass = bmi * (height / 100.0) ** 2
         p = Pawn(
-            name=f"{r.choice(FIRST_NAMES)} {r.choice(SURNAMES)}",
+            name=f"{r.choice(given_names(male, r))} {r.choice(SURNAMES)}",
             age=age, male=male, mass_kg=mass, height_cm=height,
             fat_kg=max(4.0, mass * r.uniform(0.10, 0.24)),
             adult_height_cm=adult_h, adult_mass_kg=adult_m,

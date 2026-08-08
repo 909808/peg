@@ -356,7 +356,7 @@ run.sh, run.bat       double-click launchers
 ```
 
 ```bash
-python3 -m unittest discover -s tests -t .    # 127 tests
+python3 -m unittest discover -s tests -t .    # 128 tests
 python3 tools/build.py                        # single-file build
 python3 tools/bake_earth.py                   # refresh Earth data (needs network)
 ```

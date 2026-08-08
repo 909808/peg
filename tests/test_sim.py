@@ -617,6 +617,42 @@ class TestLivestock(unittest.TestCase):
                         f"gate did nothing: {bounded} vs {unbounded}")
         self.assertLess(bounded, 45, f"flock ran away to {bounded}")
 
+    def test_a_smallholding_settles_at_its_carrying_capacity(self):
+        """The whole point of the fodder arithmetic, end to end.
+
+        A site carries the stock its grass can feed. Left alone for two years
+        the herd should neither run away nor die out -- it should sit at what
+        the hayrick supports, cutting and eating the same grass every year.
+        Before the stocking margin it ran to sixty-two hens, ate the entire
+        rick, and spent every November being slaughtered one bird at a time.
+        """
+        c = _colony(people=6, size=64)
+        for k, v in (("wood", 2000), ("grain", 900), ("stone", 300),
+                     ("salt", 40)):
+            c.store.add(k, v)
+        c.order_building("cabin", 20, 20)
+        c.order_building("hearth", 24, 20)
+        c.add_field(34, 10, 26, 26)
+        c.water_l = 300
+        # Sized to the ground: a 64 m site is 0.41 ha, which at 5.5 t/ha grows
+        # about 2.2 tonnes of grass a year. That is two or three sheep and some
+        # hens. Putting cattle on it is overstocking, and the model correctly
+        # eats them -- which is a real answer, but not what this test is for.
+        c.herd.add("sheep", 2)
+        c.herd.add("chicken", 4)
+        start = len(c.herd.alive)
+        for _ in range(300 * 24):
+            c.tick(60)
+        end = len(c.herd.alive)
+        self.assertGreater(c.population, 0, "colony died with a herd to eat")
+        self.assertGreater(end, 0, "herd died out entirely")
+        self.assertLess(end, start * 3, f"herd ran away from {start} to {end}")
+        # The real invariant: what the herd will eat over the winter must not
+        # have outgrown what the colony actually put by for it.
+        self.assertLess(c.winter_fodder_kg,
+                        c.store.amount("hay") * 2.0 + 500.0,
+                        "herd outgrew the hayrick")
+
     def test_manure_lifts_yield_but_not_without_limit(self):
         area = 1000.0
         none = livestock.fertility_bonus(0.0, area)
