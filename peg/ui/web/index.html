@@ -918,28 +918,35 @@ function drawBuildings(s) {
     }
     ctx.fillStyle = "rgba(0,0,0,.30)";
     ctx.fillRect(px + s * 0.18, pz + s * 0.22, w, w);
-    ctx.fillStyle = pal[0];
-    ctx.fillRect(px, pz, w, w);
-    // Roof planes: a lit slope and a shaded one, meeting at a ridge.
+    // A gable roof seen from above: two slopes meeting at a horizontal ridge
+    // across the middle, the far one lit and the near one shaded. Drawing it
+    // as a triangle to a centre point instead made every building look like a
+    // cardboard box with a Y felt-tipped on it.
+    const mid = pz + w * 0.46;
     ctx.fillStyle = pal[1];
-    ctx.beginPath();
-    ctx.moveTo(px, pz); ctx.lineTo(px + w, pz);
-    ctx.lineTo(px + w * 0.5, pz + w * 0.5); ctx.closePath(); ctx.fill();
+    ctx.fillRect(px, pz, w, mid - pz);
+    ctx.fillStyle = pal[0];
+    ctx.fillRect(px, mid, w, pz + w - mid);
     if (b.roofed) {
-      ctx.strokeStyle = "rgba(0,0,0,.45)";
-      ctx.lineWidth = Math.max(1, s * 0.06);
-      ctx.beginPath();
-      ctx.moveTo(px + w * 0.5, pz + w * 0.5);
-      ctx.lineTo(px + w * 0.5, pz + w);
-      ctx.moveTo(px, pz); ctx.lineTo(px + w * 0.5, pz + w * 0.5);
-      ctx.lineTo(px + w, pz); ctx.stroke();
+      ctx.strokeStyle = "rgba(255,255,255,.16)";
+      ctx.lineWidth = Math.max(1, s * 0.07);
+      ctx.beginPath(); ctx.moveTo(px, mid); ctx.lineTo(px + w, mid); ctx.stroke();
+      // Rafter lines down both slopes, at roughly a metre apart.
+      if (s >= 12) {
+        ctx.strokeStyle = "rgba(0,0,0,.16)"; ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (let t = s; t < w; t += s) {
+          ctx.moveTo(px + t, pz); ctx.lineTo(px + t, pz + w);
+        }
+        ctx.stroke();
+      }
     }
-    ctx.strokeStyle = "rgba(0,0,0,.55)"; ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(0,0,0,.6)"; ctx.lineWidth = 1;
     ctx.strokeRect(px + .5, pz + .5, w - 1, w - 1);
     if (s >= 10 && b.roofed) {                       // a door on the south face
       ctx.fillStyle = "#2a2119";
-      ctx.fillRect(px + w * 0.42, pz + w - Math.max(2, s * 0.28),
-                   Math.max(2, w * 0.16), Math.max(2, s * 0.28));
+      ctx.fillRect(px + w * 0.42, pz + w - Math.max(2, s * 0.26),
+                   Math.max(2, w * 0.16), Math.max(2, s * 0.26));
     }
   }
 }

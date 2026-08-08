@@ -406,6 +406,12 @@ class Colony:
             return 0.0
         return self.herd.feed_kg_day * self._winter_days() * 0.85
 
+    #: Breed only into this share of the fodder actually in the rick. Without
+    #: a margin the flock grows to exactly what the store will bear, eats it,
+    #: and leaves nothing for the cattle -- which is how sixty-two hens ended
+    #: a winter standing in an empty barn. A stockman keeps a reserve.
+    STOCKING_MARGIN = 0.55
+
     @property
     def fodder_capacity_kg_day(self) -> float:
         """How large a herd the colony's stored fodder can actually carry."""
@@ -413,7 +419,7 @@ class Colony:
         stored = self.store.amount("hay") + self.store.amount("grain") * 0.35
         # Grass standing on the site feeds them for the rest of the year, so
         # capacity is set by the pinch point, which is always the winter.
-        return stored / days
+        return stored / days * self.STOCKING_MARGIN
 
     @property
     def winter_fuel_mj(self) -> float:
